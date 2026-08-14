@@ -1,6 +1,6 @@
 """
 PlatformIO pre-build script: inject git branch and short SHA into
-CROSSPOINT_VERSION for the default (dev) environment.
+CROSSPOINT_VERSION for development environments.
 
 Results in a version string like:
 1.1.0-dev-feat-kosync-xpath-05c6cf8+crosspoint.1.5.0
@@ -70,7 +70,7 @@ def get_versions(project_dir):
         warn(f'platformio.ini not found at {ini_path}; versions will be "0.0.0"')
         return '0.0.0', '0.0.0'
     config = configparser.ConfigParser()
-    config.read(ini_path)
+    config.read(ini_path, encoding='utf-8')
     if not config.has_option('crosslingua', 'version'):
         warn('No [crosslingua] version in platformio.ini; version will be "0.0.0"')
     if not config.has_option('crosspoint', 'version'):
@@ -82,9 +82,9 @@ def get_versions(project_dir):
 
 
 def inject_version(env):
-    # Only applies to the dev (default) environment; release envs set the
+    # Only applies to development environments; release envs set the
     # version via build_flags in platformio.ini and are unaffected.
-    if env['PIOENV'] != 'default':
+    if env['PIOENV'] not in ('default', 'sticky'):
         return
 
     project_dir = env['PROJECT_DIR']

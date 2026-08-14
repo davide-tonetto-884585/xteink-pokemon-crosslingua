@@ -139,7 +139,9 @@ namespace {
 // directory.
 // v35 adds a uint32_t visible-text start offset to every page LUT entry. This fork's
 // header remains fork-specific because it also carries the Lingua layout/font keys.
-constexpr uint8_t SECTION_FILE_VERSION = 35;
+// v36-v38 integrate upstream ruby/CJK layout, long footnote hrefs, and Focus Reading breaks.
+// v39 is the first fork cache format containing those changes plus Lingua fields.
+constexpr uint8_t SECTION_FILE_VERSION = 39;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

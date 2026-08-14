@@ -1,154 +1,58 @@
 #pragma once
+
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
-#include <Epub/PageFontSet.h>
 #include <Epub/Section.h>
-#include <FontCacheManager.h>  // for the held FontCacheManager::PrewarmScope member below
 
-#include <cstdint>
+#include <atomic>
+#include <memory>
 #include <optional>
+#include <vector>
 
 #include "BookmarkEntry.h"
-#include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
+#include "LinguaReaderIntegration.h"
 #include "ProgressMapper.h"
-#include "activities/Activity.h"
-#include "translator/PageTranslationOverlay.h"
-#include "translator/TooltipOverlay.h"
+#include "ReaderActivity.h"
 
-// Defined in LinguaSubmenuActivity.h; forward-declared here so the reader
-// header does not pull in the submenu (and its transitive) headers.
 enum class LinguaResult : uint8_t;
 
-class EpubReaderActivity final : public Activity {
+class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   std::optional<uint16_t> pendingPageJump;
-  // Set when navigating to a footnote href with a fragment (e.g. #note1).
-  // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
-  int pagesUntilFullRefresh = 0;
-  // Image pages use a dedicated double-FAST refresh path, so retain a manual
-  // refresh request until renderContents can issue its clean base pass.
-  bool forcedRefreshPending = false;
   int cachedSpineIndex = 0;
-  // Chapter total captured with the position below, used ONLY as the denominator of the fallback
-  // page-ratio remap in render(). Must be a whole-chapter count -- Section::estimatedTotalPages(),
-  // never Section::pageCount, which for any chapter the reader has not read to its end is just the
-  // windowed build's watermark (~currentPage + BUILD_WINDOW_AHEAD).
   int cachedChapterTotalPageCount = 0;
   std::optional<uint32_t> cachedVisibleTextOffset;
-  // Visible-codepoint offset of the page currently on screen, captured when the page is loaded
-  // (Page::visibleTextOffset). Lets saveProgress persist the offset without reopening section.bin.
   std::optional<uint32_t> currentPageVisibleOffset;
-  // Explicit "land at this visible-codepoint offset in the target spine" request (bookmark open).
-  // Resolved in render() once the section is loaded/built far enough, then cleared. Unlike a
-  // settings-change reposition it always resolves by content, so it survives any re-pagination.
   std::optional<uint32_t> pendingOffsetJump;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
-  // Signals that the next render should reposition within the newly loaded section
-  // based on a cross-book percentage jump.
+  int8_t pendingManualTurn = 0;
   bool pendingPercentJump = false;
-  // Normalized 0.0-1.0 progress within the target spine item, computed from book percentage.
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
   bool pendingSyncSaveError = false;
-  // Consecutive page-load failures. Each failure drops the section and rebuilds on the next render,
-  // which recovers a transiently corrupt cache; capped so a persistently bad page can't spin forever.
   uint8_t pageLoadRetryCount = 0;
   static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
-  // Swallows the Back RELEASE that follows a sub-activity which closed on the Back PRESS.
-  // The two halves of the codebase disagree on purpose: the reader and its own submenus act on
-  // the release, while the Settings screens (and OptionPopup) act on the press. That was fine
-  // while those screens were only reachable from Settings, but the reader menu now opens
-  // TextSettingsActivity directly -- it finishes on the press, and the release then landed on the
-  // reader, which read it as its own Back and left the book. Set when returning from such a
-  // sub-activity; consumed by the first Back release loop() sees.
-  bool ignoreNextBackRelease = false;
+  bool skipNextButtonCheck = false;
   bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;
-  // "No dictionary set" popup, shown when a lookup is triggered without a configured dictionary.
   bool showDictionaryMessage = false;
   unsigned long dictionaryMessageTime = 0UL;
-  bool ignoreNextConfirmRelease = false;
-  // Page Translation overlay (LINGUA_PAGE_TRANSLATION mode). Opened by a long-press RELEASE on either side
-  // button, detected in loop() before detectPageTurn: detecting the OPEN on the release (not
-  // mid-hold) means the same release cannot also be consumed as a scroll by handleInput(), and
-  // returning after open() suppresses the page-turn / chapter-skip / orientation long-press that
-  // would otherwise fire on that release -- so no ignore-next-release latch is needed.
-  PageTranslationOverlay pageTranslationOverlay;
-  // Lingua tooltip overlay (LINGUA_TOOLTIP mode). Owns its configured nav buttons for
-  // per-sentence stepping and its own long-press page-turn; see loop()'s tooltip input block.
-  TooltipOverlay tooltipOverlay;
-  // Retained reader-font glyph prewarm for an ACTIVE translation overlay. Built ONCE (wipe + scan +
-  // prewarm) when an overlay opens or the page under it turns, then HELD across every sentence-step /
-  // overlay-scroll so those steps reuse the warm page buffer instead of re-wiping and re-decoding the
-  // whole page on demand each press (that on-demand path was ~10x slower -- see renderOverlayFrame()).
-  // Torn down when the overlay closes (normal branch of renderContents) and in onExit(); the scope's
-  // dtor clears the decompressor cache. Reuse is gated on the page identity it was built for AND the
-  // cache generation: any intervening clearCache() (a dictionary sub-activity, the next normal render)
-  // bumps FontCacheManager::cacheGeneration(), forcing a rebuild instead of reusing a wiped cache.
-  std::optional<FontCacheManager::PrewarmScope> overlayPrewarm_;
-  int overlayPrewarmSpine_ = -1;
-  int overlayPrewarmPage_ = -1;
-  // BOTH fonts the warm set covers: the page's body font and the ACTIVE overlay's own font. They are
-  // usually the same id (Same size, or an SD family that cannot step size) and fold into one prewarm
-  // scan, but a smaller overlay face is a second, separately warmed font — and each of the two modes
-  // now carries its own size, so switching overlay or changing that size can move the overlay id while
-  // the body id stands still. Tracking only the body id made such a prewarm look fresh while covering
-  // the wrong glyphs.
-  int overlayPrewarmFontId_ = -1;
-  int overlayPrewarmOverlayFontId_ = -1;
-  uint32_t overlayPrewarmGen_ = 0;
-  // Shown when a LINGUA_PAGE_TRANSLATION long-press opens the overlay on a page that has NO translated
-  // paragraphs: the overlay refuses (clears its active flag in render()), and the reader surfaces
-  // this toast instead of the previous silent no-op. Timed out in loop() like the other toasts.
-  bool showNoTranslationsForPageToast = false;
-  unsigned long noTranslationsForPageToastTime = 0UL;
-  // Lingua: when the user opens a chapter that has no translated HTML while a non-Normal
-  // display mode is active, render() PERSISTS the switch to Normal (SETTINGS.translationDisplayMode =
-  // LINGUA_NORMAL, saved) and arms this modal dialog so the change isn't silent. Because the setting is
-  // now Normal the trigger is gated out on every following chapter, so the dialog fires exactly once
-  // per downgrade.
-  //
-  // This replaces the old auto-hiding toast, which was a SECOND e-ink refresh composited on top of
-  // the page renderContents() had just refreshed (drawWrappedPopup -> its own displayBuffer). After
-  // the upstream merge made the page refresh asynchronous, that trailing popup refresh could be
-  // issued while the panel was still mid-refresh and wedge the controller's BUSY line -- a hang that
-  // presented as a permanent freeze (the render task parked in a bounded BUSY wait holding the
-  // RenderLock, so no watchdog fired but every input stalled). The dialog instead OWNS the screen:
-  // render() draws it as ONE self-contained refresh with no page underneath, and loop() consumes all
-  // reader input until the user dismisses it with Confirm/Back. No timer.
-  bool fallbackDialogActive = false;
-  // Set once render() has actually painted the dialog. loop() only accepts the dismiss press
-  // when this is true, so a button release racing the arming render (armed but not yet drawn)
-  // cannot silently drop the notice.
-  bool fallbackDialogDrawn = false;
   bool currentPageBookmarked = false;
-  // Session-only Interlinear reveal state. Hiding is a render-time operation: annotation lines stay
-  // in the cached page and therefore continue to reserve exactly the same vertical space.
-  bool interlinearTranslationVisible = true;
-  // Idle-time glyph prewarm: after a page settles, scan the LIKELY next page
-  // (scan mode draws nothing) and load its missing glyphs from SD during idle,
-  // so the next turn's in-render prewarm is a cache hit instead of ~100 ms of
-  // SD reads on the page-turn critical path. One attempt per position.
   int idlePrewarmSpine = -1;
   int idlePrewarmPage = -1;
   unsigned long lastRenderCompleteMs = 0;
-  bool bookmarkRemoved = false;  // true when last toggle removed (controls popup text)
+  bool bookmarkRemoved = false;
   std::vector<BookmarkEntry> cachedBookmarks;
-  // Tracks whether this book is currently removed from Recent Books by the
-  // removeReadBooksFromRecents feature (set at End-of-Book, cleared if paged back in).
   bool recentsEntryRemoved = false;
   unsigned long bookmarkMessageTime = 0UL;
-  // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
-  // Consumed in onExit() to relocate the finished book into /Read/.
   bool pendingReadFolderMove = false;
-  // Next-book suggestion menu for the End-of-Book screen
-  EndOfBookOptions endOfBookOptions;
+  LinguaReaderIntegration lingua;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -160,185 +64,73 @@ class EpubReaderActivity final : public Activity {
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
 
-  // Viewport of the last render(), captured so loop()'s lazy partial-extension start
-  // builds with IDENTICAL layout parameters to the pages already rendered (a mismatch
-  // would paginate differently than the partial being extended). 0 = no render yet.
   uint16_t buildViewportWidth = 0;
   uint16_t buildViewportHeight = 0;
-  // Set when the lazy extension start failed, so loop() doesn't retry (and log) every
-  // tick; the blocking extension in render() remains the fallback past the watermark.
   bool partialRebuildStartFailed = false;
 
-  // Last position persisted by render()'s saveProgress, used to skip redundant
-  // writeAtomic calls on no-op re-renders (menu/bookmark/screenshot).
   int lastSavedSpineIndex = -1;
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
 
-  void renderContents(Page& page, int orientedMarginTop, int orientedMarginRight, int orientedMarginBottom,
-                      int orientedMarginLeft);
-  // Fork-parity render path for a page with an active translation overlay (LINGUA_TOOLTIP / LINGUA_PAGE_TRANSLATION):
-  // page + status bar + overlay composited into ONE BW frame, a single refresh, and (when the page
-  // is visible, i.e. not under the Page Translation overlay) the grayscale AA pass. Avoids the second slow refresh the
-  // old overlay path did on every sentence step / scroll.
-  void renderOverlayFrame(Page& page, const PageFontSet& fonts, int orientedMarginTop, int orientedMarginRight,
-                          int orientedMarginBottom, int orientedMarginLeft);
-  void renderStatusBar() const;
-  // Pages laid out per incremental-build pump: on the render path (catching up to the page
-  // being shown) and per loop() tick (background build of a large chapter). Kept small so a
-  // background build chunk never noticeably delays input or a pending render.
   static constexpr int BUILD_PAGES_PER_CHUNK = 8;
   static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
-
-  // MEMFIX-PORT: background-build heap floor; portable
-  // Skip background build ticks below this free-heap floor. The parse path grows
-  // word vectors of heap strings — throwing allocations that abort() on OOM under
-  // -fno-exceptions (field crash: bad_alloc in ParsedText::addWord during a
-  // background tick under heap pressure). The tick is deferrable work:
-  // page-turn transients free up between turns and the build resumes; the render
-  // path still builds the page it actually needs regardless of this floor.
   static constexpr size_t BACKGROUND_BUILD_MIN_FREE_HEAP = 32 * 1024;
-  // Fragmentation floor for the same gate: a tick passed the free-heap floor at
-  // 34.7 KB free but the largest block was ~11 KB, and a parse allocation inside the
-  // tick aborted anyway. Free heap says how much memory exists; maxAlloc says whether
-  // any single allocation can actually have it. 16 KB also keeps the advance-table
-  // batch path (16 KB scratch) viable during builds.
   static constexpr size_t BACKGROUND_BUILD_MIN_MAX_ALLOC = 16 * 1024;
-  // Gate for a background build tick: true when the heap can take parse allocations.
-  // Updates buildHeapPaused as a side effect.
   bool buildTickHeapGate();
-  // True while the background build is gated on the heap floors. Lets skipLoopDelay()
-  // return the loop to normal delay/power-saving during the pause: isBuilding() stays
-  // true the whole time, and without this the loop would spin at full CPU speed doing
-  // no build work — indefinitely, if the build context itself keeps the heap low.
-  // Sampled only by the tick (see backgroundBuildHasWork() for the other half of the
-  // same "is there work to do right now?" question).
   bool buildHeapPaused = false;
-  // Heap floor for optional render-adjacent work (idle prewarm). Page
-  // deserialization (TextBlock word vectors/strings) and glyph caching allocate
-  // through throwing paths that abort() on OOM; skip deferrable work below it.
   static constexpr size_t RENDER_MIN_FREE_HEAP = 24 * 1024;
-  // How many pages to keep laid out ahead of the reader for a still-building section. A page
-  // turn is ~1s on e-ink and a page builds in ~30ms, so the reader can't out-click the builder
-  // -- a tiny buffer is enough. The background build stops once the watermark is this far
-  // ahead and resumes as the reader advances; building unbounded instead locked up input by
-  // monopolizing the RenderLock. A giant single-spine book therefore never finalizes its .bin
-  // in one sitting -- instant reopen comes from Section::suspendBuild() persisting the pages
-  // already laid out as a partial file on exit/sleep.
   static constexpr int BUILD_WINDOW_AHEAD = 5;
-  // Single source of truth for "the background build has work it can do right now": a build is
-  // running AND the look-ahead window is open. loop()'s build tick and skipLoopDelay() must agree
-  // on this. When they drifted apart, skipLoopDelay() stayed true for every page of a still-building
-  // chapter (isBuilding() never clears on a giant single-spine book) while the tick was a no-op with
-  // the window closed — the loop yield()-spun at full CPU doing zero build work, the same shape of
-  // bug buildHeapPaused was added to fix, just from a different cause.
-  // A partial's window is always open by design: its pageCount is pinned at the previous session's
-  // watermark until the extension catches up, so the arithmetic below would wrongly read "far enough
-  // ahead" and stall the rebuild at 0 pages.
-  // Deliberately cheap — skipLoopDelay() calls this every loop iteration, so no heap reads and no
-  // mutex peeks here; the heap gate is sampled by the tick and cached in buildHeapPaused.
-  bool backgroundBuildHasWork() const {
-    return section && section->isBuilding() &&
-           (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
-  }
-  // Reopening a partial does NOT immediately restart its extension build (a whole-chapter
-  // re-layout from page 0 -- minutes of background CPU + SD writes on a giant spine, wasted
-  // when the reader never crosses the watermark that session). Instead loop() starts it once
-  // the reader is within this many pages of the watermark: at ~30s per page read and ~100-300ms
-  // per page rebuilt, this margin gives the rebuild ample runway to catch up (and finalize)
-  // before the reader arrives.
   static constexpr int PARTIAL_REBUILD_START_MARGIN = 15;
-  // Show the indexing popup when an initial build must lay out more than this many pages up front
-  // (a deep resume/jump into a not-yet-built section), so it isn't a silent wait. Kept independent
-  // of the small look-ahead window so ordinary landings stay popup-free.
   static constexpr int BUILD_POPUP_PAGE_THRESHOLD = 20;
-  // Also show the popup when first building a spine larger than this (uncompressed bytes): its
-  // whole HTML must be inflated before page 1 can lay out (the giant single-spine case), which is
-  // a multi-second wait. Normal chapters are well under this and stay popup-free.
   static constexpr size_t BUILD_POPUP_BYTE_THRESHOLD = 96 * 1024;
-  // Deadline backstop for the predictive gates above: if the blocking build-to-target still
-  // hasn't produced the landing page this long after the build started, surface the popup
-  // mid-build. Builds that finish under the deadline stay popup-free.
   static constexpr unsigned long BUILD_POPUP_DEADLINE_MS = 1000;
-  // True only during onEnter's blocking build-to-target phase, until the popup has been
-  // drawn. Gates showBuildPopup() so the parser's popup callback (which persists into
-  // background buildSomeMore chunks) can never draw over a displayed page.
   bool buildPopupPending = false;
-  // Draw the indexing popup mid-build (parser image-probe callback and deadline backstop).
-  void showBuildPopup();
-  // Map the cached content position into the rebuilt section (used after a
-  // settings change re-paginates a chapter). Returns true if currentPage moved.
-  // No-op while the section is still building or when the pagination is unchanged (plain resume).
+  void showBuildPopup(GfxRenderer& renderer, int& pagesUntilFullRefresh);
   bool applyDeferredReposition();
+  void clearDeferredReposition();
   void rememberCurrentContentOffset();
-  void armReposition();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
-  // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
-  // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();
   void openDictionaryWordSelect();
-  // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
-  // because no KOReader credentials are stored.
   bool launchKOReaderSync();
-  // Tears down the reader (saveProgress -> release Epub + Section) and replaces it
-  // with the chapter/book translator, modeled on launchKOReaderSync(): the ~65KB
-  // freed lets wolfSSL complete the TLS handshake. The translator relaunches the
-  // reader on exit via goToReader(). Called from the LINGUA result handler.
   void launchTranslation(LinguaResult kind);
-  void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
-  void pageTurn(bool isForwardTurn);
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
 
-  // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
 
-  // Lingua: called from render() when a chapter has no translation but the mode is
-  // non-Normal (the caller has already persisted the switch to Normal). Arms the modal fallback
-  // dialog; the same render pass draws it and loop() dismisses it on Confirm/Back.
-  void armFallbackDialog();
-  // Draws the full-screen "switched to Normal mode" modal (header + wrapped message + OK/Back hints)
-  // as a single self-contained e-ink refresh, styled like the codebase's confirm/prompt screens. No
-  // page is composited underneath, so no second refresh is ever layered over an async page refresh.
-  void drawFallbackDialog() const;
+  void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
+                      int orientedMarginBottom, int orientedMarginLeft);
+  void renderStatusBar() const;
+  void applyOrientation(uint8_t orientation);
+
+  bool loadBook() override;
+  std::string getBookTitle() const override { return epub ? epub->getTitle() : ""; }
+  std::string getBookAuthor() const override { return epub ? epub->getAuthor() : ""; }
+  std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : ""; }
+  void renderBook() override;
+  void onEndOfBookRendered() override;
 
  public:
-  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,
-                              int initialRefreshCountdown)
-      : Activity("EpubReader", renderer, mappedInput),
-        epub(std::move(epub)),
-        pagesUntilFullRefresh(initialRefreshCountdown) {}
-  void onEnter() override;
-  void onExit() override;
+  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                              bool allowFastInitialRefresh)
+      : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
+  ~EpubReaderActivity() override;
+
   void loop() override;
-  void render(RenderLock&& lock) override;
-  // Full CPU speed + fast loop ticks only while the background build can actually make progress
-  // this tick: at the low-power frequency a giant chapter's background rebuild stretches from ~40s
-  // to many minutes, so the reader exits before it can finalize and the next open restarts it from
-  // page 0. Same predicate as loop()'s build tick (backgroundBuildHasWork()) plus the tick's cached
-  // heap gate, so the loop never pins the CPU for a tick that would do nothing: it reverts to normal
-  // delay/power-saving the moment the build finishes, is heap-paused, or has run BUILD_WINDOW_AHEAD
-  // pages past the reader.
-  // The build cannot stall on this: the main loop always runs (the "no work" path is delay(10)/
-  // delay(50), never a block), and a page turn advances currentPage inside the same
-  // activityManager.loop() call that is polled here — so the window reopens before this is next
-  // evaluated, and main.cpp has already restored the normal CPU frequency on the button press.
-  bool skipLoopDelay() override { return backgroundBuildHasWork() && !buildHeapPaused; }
-  bool isReaderActivity() const override { return true; }
-  bool handleForcedRefresh() override {
-    {
-      RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
-      forcedRefreshPending = true;
-    }
-    requestUpdate();
-    return true;
-  }
+
+  bool pageTurn(bool isForward) override;
+  bool skipPages(int amount) override;
+  bool isAtEndOfBook() const override;
+  void onReturnFromEndOfBook() override;
+
+  bool skipLoopDelay() override;
+
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;
 };

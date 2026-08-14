@@ -39,9 +39,17 @@ class ParsedText {
  private:
   std::deque<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
-  std::vector<bool> wordContinues;      // true = word attaches to previous with no break
-  std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
-  std::vector<bool> wordIsFocusSuffix;  // true = token is the regular tail of a focus bold-prefix split
+  // Boundary flags use all four combinations:
+  //   continues=false, noSpace=false: ordinary breakable word gap
+  //   continues=false, noSpace=true:  breakable zero-width, stretchable CJK/Korean gap
+  //   continues=true,  noSpace=false: unbreakable attachment
+  //   continues=true,  noSpace=true:  breakable zero-width, non-stretching attachment
+  std::vector<bool> wordContinues;
+  std::vector<bool> wordNoSpaceBefore;
+  // Focus Reading emphasis: bytes [0, wordFocusBoundary) render bold, the rest at wordStyles.
+  // 0 = none. An annotation rather than a token split, so the hyphenator and line breaker still
+  // see whole words; TextBlock stores emphasis the same way, so extractLine passes it through.
+  std::vector<uint8_t> wordFocusBoundary;
   // Zero-based visible Unicode-codepoint offsets in the spine body, stored as
   // uint16_t deltas from a shared base to keep this layout-only metadata small.
   // Pathological spans wider than uint16_t use sparse rebases; rendered
@@ -65,7 +73,7 @@ class ParsedText {
   std::vector<uint16_t> reorderedWidthsScratch;
   std::vector<bool> reorderedContinuesScratch;
   std::vector<bool> reorderedNoSpaceBeforeScratch;
-  std::vector<bool> reorderedFocusSuffixScratch;
+  std::vector<uint8_t> reorderedFocusBoundaryScratch;
   std::vector<uint16_t> visualOrderScratch;
   // Word indices (in the CURRENT layout call's PRE-layout index space) whose final resting place the
   // caller wants reported back. Ascending, at most INTERLINEAR_MAX_ANNOTATIONS entries. Empty for
@@ -82,6 +90,9 @@ class ParsedText {
   void pushVisibleOffset(uint32_t offset);
   void insertVisibleOffset(size_t wordIndex, uint32_t offset);
   void eraseVisibleOffsetPrefix(size_t count);
+  int calculateRubyExtraStartOffset(size_t wordIdx, size_t maxWordIdx, const GfxRenderer& renderer, int fontId) const;
+  int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
+                                  int fontId) const;
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
   // Everything that must be settled before the first word is measured: the paragraph's base
   // direction, whether its alignment is the natural one for that direction, and (for an SD-card
@@ -165,7 +176,11 @@ class ParsedText {
   // or it counts "O" "k" where the rest of the system counts "Ok" — which is a different sentence,
   // a different match key and a different junk verdict (LinguaLayout::Interlinear's sentence pairing).
   bool wordIsFocusSuffixAt(const size_t index) const {
-    return index < wordIsFocusSuffix.size() && wordIsFocusSuffix[index];
+    // Upstream now stores a focus split as a byte boundary inside one token,
+    // rather than emitting a second suffix token. Lingua's pairing code keeps
+    // this compatibility query, but there are no suffix tokens to collapse.
+    (void)index;
+    return false;
   }
   // True when at least one word added to this block starts with an RTL codepoint. Set as words arrive,
   // so it is final once the block is complete and readable before or after layout.
