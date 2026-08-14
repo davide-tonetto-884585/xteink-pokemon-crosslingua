@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
 
-#include "InterlinearAnnotation.h"
-#include "LinguaLayout.h"
+#include "modules/lingua/modes/interlinear/InterlinearAnnotation.h"
+#include "modules/lingua/layout/LinguaLayout.h"
 
 // The resolved text-rendering configuration a reader hands to the layout
 // engine. Section-cache validation keys on every VALUE field: a section file built
@@ -53,7 +53,7 @@ struct ReaderRenderSpec {
   // pure function of the two texts, identical in every build, so it cannot change what a cached page
   // contains; it is carried here only because this struct is already the one channel from the app to
   // the layout engine. nullptr disables annotation emission (the source paragraph then lays out
-  // exactly as under Original Only). See lib/Epub/Epub/InterlinearAnnotation.h.
+  // exactly as under Original Only). See the Lingua InterlinearAnnotation contract.
   InterlinearPairFn interlinearPairFn = nullptr;
 
   // True when a chapter laid out under `other` can be served under this spec without a

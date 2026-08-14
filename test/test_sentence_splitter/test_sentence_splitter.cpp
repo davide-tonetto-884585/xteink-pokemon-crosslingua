@@ -5,14 +5,14 @@
 #include <string>
 #include <vector>
 
-// The real headers. `[env:native]` puts src/translator on the include path and compiles
+// The real headers. `[env:native]` puts the Lingua utils directory on the include path and compiles
 // SentenceSplitter.cpp + TextNormalize.cpp + SentencePairing.cpp, so nothing here is mirrored:
 // every struct and every helper under test is the production one. (This file used to carry a
 // hand-copied clone of groupTranslationSteps, kept in sync by comment, because its home TU pulled
 // GfxRenderer/Page/HalStorage and could not link on the host. Extracting the rule into
 // SentencePairing.cpp -- pure text logic -- removed the need for the clone.)
-#include "SentencePairing.h"
-#include "SentenceSplitter.h"
+#include "modules/lingua/utils/SentencePairing.h"
+#include "modules/lingua/utils/SentenceSplitter.h"
 
 static constexpr int TEST_MAX_SENTENCES = MAX_SENTENCES;
 

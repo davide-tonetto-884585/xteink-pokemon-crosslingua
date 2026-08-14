@@ -128,12 +128,12 @@ class HttpDownloader {
  * cannot be allocated, every method transparently delegates to the matching
  * HttpDownloader static — behavior is then identical to not using a session.
  */
-class TranslationHttpSession {
+class ReusableHttpSession {
  public:
-  TranslationHttpSession();
-  ~TranslationHttpSession();
-  TranslationHttpSession(const TranslationHttpSession&) = delete;
-  TranslationHttpSession& operator=(const TranslationHttpSession&) = delete;
+  ReusableHttpSession();
+  ~ReusableHttpSession();
+  ReusableHttpSession(const ReusableHttpSession&) = delete;
+  ReusableHttpSession& operator=(const ReusableHttpSession&) = delete;
 
   // Mirror of HttpDownloader::fetchUrl(url, std::string&): GET, buffered body,
   // follows redirects, true only on HTTP 200 with a complete body. Does NOT

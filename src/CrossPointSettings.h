@@ -187,7 +187,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   //
   // PERMANENT HOLES: 1 and 2. They were the "Dimmed" / "Dimmed Light" modes, which are now ONE
   // mode (LINGUA_INTERLEAVED) plus the translationShade colour sub-setting. The two values are retired,
-  // NEVER selectable (they are absent from LINGUA_SELECTABLE_MODES in LinguaModes.h) and
+  // NEVER selectable (they are absent from LINGUA_SELECTABLE_MODES in LinguaModeCatalog.h) and
   // migrated to LINGUA_INTERLEAVED + shade at load (see fromJson). They are kept as holes — never
   // reused, never renumbered — so an old settings.json is migrated rather than reinterpreted.
   enum LINGUA_MODE : uint8_t {
@@ -207,7 +207,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // LOAD-TIME VALIDITY BOUND ONLY: fromJson() clamps a stored translationDisplayMode >= this to
   // LINGUA_NORMAL. It is deliberately NOT an enumerator and NOT a UI iteration count — the retired
   // holes at 1 and 2 make the value range non-contiguous, so every UI list and cycle walks
-  // LINGUA_SELECTABLE_MODES instead (src/LinguaModes.h).
+  // LINGUA_SELECTABLE_MODES instead (modules/lingua/LinguaModeCatalog.h).
   static constexpr uint8_t LINGUA_MODE_COUNT = LINGUA_INTERLINEAR + 1;
 
   // Lingua: colour of translated text in Interleaved mode (LINGUA_INTERLEAVED). It selects the

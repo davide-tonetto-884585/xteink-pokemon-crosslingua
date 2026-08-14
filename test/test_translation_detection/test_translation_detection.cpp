@@ -6,9 +6,9 @@
 // engine (ChapterHtmlSlimParser::currentBlockIsTranslated) and the per-chapter gate
 // (Section::hasTranslation): if they ever disagree, a chapter either claims a translation and
 // renders none, or -- the bug this was written for -- has one and is refused every bilingual mode.
-#include "TranslationDetection.h"
+#include "modules/lingua/services/TranslatedContentDetector.h"
 
-using translationdetect::isTranslatedLangTag;
+using lingua::content::isTranslatedLangTag;
 
 // --- the basic rule ------------------------------------------------------------------------------
 

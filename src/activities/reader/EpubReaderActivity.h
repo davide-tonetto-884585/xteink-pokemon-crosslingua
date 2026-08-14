@@ -11,7 +11,7 @@
 
 #include "BookmarkEntry.h"
 #include "EpubReaderMenuActivity.h"
-#include "LinguaReaderIntegration.h"
+#include "modules/lingua/reader/LinguaReaderIntegration.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
 

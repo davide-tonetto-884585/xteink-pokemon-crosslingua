@@ -10,10 +10,10 @@
 #include <vector>
 
 #include "Epub/FootnoteEntry.h"
-#include "Epub/InterlinearAnnotation.h"
+#include "modules/lingua/modes/interlinear/InterlinearAnnotation.h"
 #include "Epub/PageFontSet.h"
 #include "Epub/ParsedText.h"
-#include "Epub/LinguaLayout.h"
+#include "modules/lingua/layout/LinguaLayout.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
@@ -79,7 +79,7 @@ class ChapterHtmlSlimParser {
   // back out of the page's PageFontSet.
   int annotationFontId = 0;
   // Lingua (LinguaLayout::Interlinear): the app's sentence aligner (see
-  // Epub/InterlinearAnnotation.h). nullptr means "no annotations": the source paragraph still lays
+  // Lingua InterlinearAnnotation contract). nullptr means "no annotations": the source paragraph still lays
   // out, it just carries no rows.
   InterlinearPairFn interlinearPairFn = nullptr;
   // Reusable annotation buffer for the interlinear pass, sized once on the first annotated paragraph

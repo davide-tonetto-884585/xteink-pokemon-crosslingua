@@ -1,4 +1,4 @@
-// Host-side unit test for the canonical text fold (src/translator/TextNormalize).
+// Host-side unit test for Lingua's canonical text fold.
 // Built and run via the CMake native-test harness (test/CMakeLists.txt ->
 // add_subdirectory(text_normalize)). No device/framework deps; its own main()
 // returns non-zero on failure so CTest reports pass/fail.
@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <string>
 
-#include "TextNormalize.h"
+#include "modules/lingua/utils/TextNormalize.h"
 
 using textnorm::closingQuoteLenAt;
 using textnorm::ELLIPSIS_SENTINEL;

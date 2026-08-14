@@ -5,10 +5,10 @@
 #include <Memory.h>
 #include <Serialization.h>
 
-#include "Epub/TranslationDetection.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
+#include "modules/lingua/services/TranslatedContentDetector.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
@@ -100,7 +100,7 @@ namespace {
 //   one that simply requested Normal. Without the flag, a chapter laid out before its translation
 //   arrived would stay a cache HIT afterwards and silently serve untranslated pages in a bilingual
 //   mode -- and, symmetrically, a translated cache would survive the translation being deleted.
-//   The language comparison behind it is translationdetect::isTranslatedLangTag: primary subtag,
+//   The language comparison behind it is lingua::content::isTranslatedLangTag: primary subtag,
 //   ASCII case-insensitive, with `-` and `_` both ending the subtag, so `uk-UA` in an `en` book is
 //   translated while `en-GB` is not. That predicate is shared with ChapterHtmlSlimParser, so the
 //   gate that enables a bilingual layout and the engine that renders it can never disagree.
@@ -471,84 +471,6 @@ bool Section::clearCache() const {
   return true;
 }
 
-std::string Section::getTranslatedHtmlPath() const {
-  return epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + ".translated.html";
-}
-
-std::string Section::getCachedHtmlPath() const {
-  return epub->getCachePath() + "/html/" + std::to_string(spineIndex) + ".html";
-}
-
-bool Section::hasTranslatedSidecar() const {
-  // The translated HTML is committed atomically: it is written to a ".part" file and only
-  // renamed into place after a clean, complete write. So a finished translation is exactly
-  // "the final file exists" — a power loss mid-translation leaves only a ".part", never a
-  // truncated final file. This also keeps pre-existing translated caches (written before the
-  // atomic-commit change) valid, so users are never forced to re-translate. The stale ".part"
-  // itself is reclaimed by clearCache() on the next .bin invalidation.
-  return Storage.exists(getTranslatedHtmlPath().c_str());
-}
-
-bool Section::hasTranslation() const {
-  if (translationPresence_ != TranslationPresence::Unknown) {
-    return translationPresence_ == TranslationPresence::Yes;
-  }
-  // A committed sidecar IS a translation by construction; no scan needed, and this keeps the
-  // reader-translated path at exactly the single SD stat it always cost.
-  if (hasTranslatedSidecar()) {
-    translationPresence_ = TranslationPresence::Yes;
-    return true;
-  }
-  // No sidecar: the translation, if any, is embedded in the chapter's own XHTML. That needs the
-  // unzipped HTML, which is cached per book and outlives every .bin invalidation -- so any chapter
-  // that has ever been built answers from disk here.
-  const std::string htmlPath = getCachedHtmlPath();
-  if (Storage.exists(htmlPath.c_str())) {
-    translationPresence_ = translationdetect::htmlHasTranslatedBlock(htmlPath, epub->getLanguage())
-                               ? TranslationPresence::Yes
-                               : TranslationPresence::No;
-    return translationPresence_ == TranslationPresence::Yes;
-  }
-  // Not knowable without inflating the spine, which is not this function's call to make. Stay
-  // Unknown (so the next call re-resolves) and answer in the safe direction -- see Section.h.
-  return true;
-}
-
-void Section::resolveTranslationPresence() {
-  if (translationPresence_ != TranslationPresence::Unknown) return;
-  // Try the free routes first (sidecar stat, or a scan of an already-unzipped chapter HTML). NOT
-  // via its return value: hasTranslation() answers true while Unknown, so only the memo says
-  // whether it actually resolved anything.
-  (void)hasTranslation();
-  if (translationPresence_ != TranslationPresence::Unknown) return;
-  // Only reachable with no sidecar and no cached chapter HTML. Inflate it -- the same inflate a
-  // build of this chapter pays, promoted to the same cache startBuild() then reuses, so this
-  // hoists the cost rather than adding one.
-  std::string parsePath;
-  bool promoted = false;
-  if (!ensureChapterHtml(parsePath, promoted)) {
-    LOG_DBG("SCT", "Could not inflate spine %d to resolve translation presence", spineIndex);
-    return;  // stays Unknown -> hasTranslation() keeps answering in the safe direction
-  }
-  translationPresence_ = translationdetect::htmlHasTranslatedBlock(parsePath, epub->getLanguage())
-                             ? TranslationPresence::Yes
-                             : TranslationPresence::No;
-  if (!promoted) {
-    // An un-promoted temp is nobody's to keep: startBuild() would re-inflate it under its own
-    // ownership rules, and leaving it would strand a stale ".tmp_<n>.html" in the cache dir.
-    Storage.remove(parsePath.c_str());
-  }
-}
-
-LinguaLayout Section::effectiveLayout(const LinguaLayout requested, const bool translatedSource) {
-  // With no translation in the source there are no translated words to drop, keep or pair, so EVERY
-  // layout degrades to Both -- which on an untranslated chapter is just the plain original. Both is
-  // therefore both the request and the fallback, which is exactly why it says nothing about the
-  // source the pages came from and why the caller pairs this with the translatedSource flag in the
-  // cache key. See the declaration comment in Section.h.
-  return translatedSource ? requested : LinguaLayout::Both;
-}
-
 bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
   // One-shot build: start, then lay out the whole section in a single pass.
   if (!startBuild(spec, popupFn)) {
@@ -704,7 +626,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
     translatedSource = translationPresence_ == TranslationPresence::Yes;
     embeddedTranslation = translatedSource;
   } else {
-    embeddedTranslation = translationdetect::htmlHasTranslatedBlock(parseSource, epub->getLanguage());
+    embeddedTranslation = lingua::content::htmlHasTranslatedBlock(parseSource, epub->getLanguage());
     translatedSource = embeddedTranslation;
     translationPresence_ = translatedSource ? TranslationPresence::Yes : TranslationPresence::No;
   }

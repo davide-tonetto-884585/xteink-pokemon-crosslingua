@@ -8,7 +8,7 @@
 #include <functional>
 #include <string>
 
-#include "util/HeapBackpressure.h"
+#include "modules/lingua/services/HeapBackpressure.h"
 
 #if defined(FREEINK_NET_WOLFSSL)
 #include <SecureHttpClient.h>
@@ -509,7 +509,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   return OK;
 }
 
-// ─── TranslationHttpSession — one kept-alive connection for a request burst ───
+// ─── ReusableHttpSession — one kept-alive connection for a request burst ───
 //
 // See the class doc in HttpDownloader.h. The reusable client only exists on the
 // wolfSSL build; on the esp_http_client build (and if the client can't be
@@ -519,7 +519,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 // later, reused request with the much smaller reuse floor.
 
 #if defined(FREEINK_NET_WOLFSSL)
-struct TranslationHttpSession::Impl {
+struct ReusableHttpSession::Impl {
   freeink::SecureHttpClient http;
   bool everConnected = false;  // false until a request has established the connection
 
@@ -539,10 +539,10 @@ struct TranslationHttpSession::Impl {
   bool heapRefused() const { return everConnected ? insufficientHeapForReuse() : insufficientHeapForTls(); }
 };
 #else
-struct TranslationHttpSession::Impl {};  // no reusable client off wolfSSL; methods delegate to statics
+struct ReusableHttpSession::Impl {};  // no reusable client off wolfSSL; methods delegate to statics
 #endif
 
-TranslationHttpSession::TranslationHttpSession() {
+ReusableHttpSession::ReusableHttpSession() {
 #if defined(FREEINK_NET_WOLFSSL)
   impl = makeUniqueNoThrow<Impl>();
   if (!impl) {
@@ -554,9 +554,9 @@ TranslationHttpSession::TranslationHttpSession() {
 }
 
 // unique_ptr frees Impl here; SecureHttpClient's destructor closes the socket.
-TranslationHttpSession::~TranslationHttpSession() = default;
+ReusableHttpSession::~ReusableHttpSession() = default;
 
-bool TranslationHttpSession::fetchUrl(const std::string& url, std::string& outContent) {
+bool ReusableHttpSession::fetchUrl(const std::string& url, std::string& outContent) {
 #if defined(FREEINK_NET_WOLFSSL)
   if (impl) {
     outContent.clear();
@@ -584,8 +584,8 @@ bool TranslationHttpSession::fetchUrl(const std::string& url, std::string& outCo
   return HttpDownloader::fetchUrl(url, outContent);
 }
 
-bool TranslationHttpSession::post(const std::string& url, const std::string& body, const char* contentType,
-                                  const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent) {
+bool ReusableHttpSession::post(const std::string& url, const std::string& body, const char* contentType,
+                               const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent) {
 #if defined(FREEINK_NET_WOLFSSL)
   if (impl) {
     outContent.clear();
@@ -622,14 +622,14 @@ bool TranslationHttpSession::post(const std::string& url, const std::string& bod
   return HttpDownloader::post(url, body, contentType, extraHeaderName, extraHeaderValue, outContent);
 }
 
-bool TranslationHttpSession::postJson(const std::string& url, const std::string& jsonBody,
-                                      const std::string& authHeader, std::string& outContent) {
+bool ReusableHttpSession::postJson(const std::string& url, const std::string& jsonBody, const std::string& authHeader,
+                                   std::string& outContent) {
   const char* authName = authHeader.empty() ? nullptr : "Authorization";
   const char* authValue = authHeader.empty() ? nullptr : authHeader.c_str();
   return post(url, jsonBody, "application/json", authName, authValue, outContent);
 }
 
-bool TranslationHttpSession::waitForHeapReady(uint32_t timeoutMs, volatile const bool* cancelFlag) {
+bool ReusableHttpSession::waitForHeapReady(uint32_t timeoutMs, volatile const bool* cancelFlag) {
 #if defined(FREEINK_NET_WOLFSSL)
   if (impl) {
     // Mirror heapRefused()'s floor selection: a request on an already-handshaken

@@ -146,7 +146,7 @@ class Section {
   //     attribute -- the language tag is the whole signal).
   // Answering only the first question is what locked plugin-translated books out of every
   // bilingual display mode: the reader's per-chapter fallback fired on every chapter and persisted
-  // the mode back to Normal. See TranslationDetection.h for the shared rule.
+  // the mode back to Normal. See TranslatedContentDetector.h for the shared rule.
   //
   // Memoized (translationPresence_): the first call may SAX-scan the chapter HTML, later calls are
   // free. Callers may treat this as a per-chapter-load cost.

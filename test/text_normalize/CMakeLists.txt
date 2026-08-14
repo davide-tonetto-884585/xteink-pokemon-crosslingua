@@ -2,11 +2,11 @@
 # built as a plain executable and registered with CTest directly (no GTest).
 add_executable(TextNormalizeTest
   TextNormalizeTest.cpp
-  ${REPO_ROOT}/src/translator/TextNormalize.cpp
+  ${REPO_ROOT}/src/modules/lingua/utils/TextNormalize.cpp
 )
 
 target_include_directories(TextNormalizeTest PRIVATE
-  ${REPO_ROOT}/src/translator
+  ${REPO_ROOT}/src/modules/lingua/utils
 )
 
 target_link_libraries(TextNormalizeTest PRIVATE

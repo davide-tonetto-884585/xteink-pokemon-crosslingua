@@ -12,9 +12,10 @@
 #include "I18nKeys.h"
 #include "ReaderFontSizes.h"
 #include "SettingsList.h"
-#include "activities/translator/LanguagePickerActivity.h"
+#include "modules/lingua/activities/LanguagePickerActivity.h"
 #include "fontIds.h"
-#include "translator/InterlinearPairing.h"
+#include "modules/lingua/modes/interlinear/InterlinearPairing.h"
+#include "modules/lingua/modes/LinguaModeRegistry.h"
 
 namespace {
 
@@ -376,33 +377,7 @@ CrossPointSettings::StatusBarSpec CrossPointSettings::statusBarSpec() const {
 }
 
 LinguaLayout CrossPointSettings::linguaLayoutForDisplayMode(const uint8_t mode) {
-  switch (static_cast<LINGUA_MODE>(mode)) {
-    // Overlay modes surface their translations in a popup composited at view time, so their main
-    // flow is original-only — the same pages Original Only produces, byte for byte.
-    case LINGUA_ORIGINAL_ONLY:
-    case LINGUA_PAGE_TRANSLATION:
-    case LINGUA_TOOLTIP:
-      return LinguaLayout::OriginalOnly;
-    case LINGUA_TRANSLATION_ONLY:
-      return LinguaLayout::TranslationOnly;
-    case LINGUA_SIDE_BY_SIDE:
-      return LinguaLayout::SideBySide;
-    // Its own layout: every source sentence starts a new line and the translation is emitted as a
-    // small annotation row ABOVE that line, so the pages genuinely differ from every other mode's and
-    // cannot share a cache entry with them.
-    case LINGUA_INTERLINEAR:
-      return LinguaLayout::Interlinear;
-    // Everything inline-bilingual. Interleaved differs from Normal only in the gray level translated
-    // words are DRAWN at (translationShade), which never moves a glyph, so the pages are identical.
-    // The retired holes can never reach this function (fromJson migrates them), but are mapped so the
-    // switch stays exhaustive.
-    case LINGUA_NORMAL:
-    case LINGUA_INTERLEAVED:
-    case LINGUA_LEGACY_DIMMED:
-    case LINGUA_LEGACY_DIMMED_LIGHT:
-      return LinguaLayout::Both;
-  }
-  return LinguaLayout::Both;  // unreachable: every enumerator returns above
+  return LinguaModeRegistry::layoutFor(static_cast<LINGUA_MODE>(mode));
 }
 
 int CrossPointSettings::translationFontIdForSize(const uint8_t sizeSetting) const {

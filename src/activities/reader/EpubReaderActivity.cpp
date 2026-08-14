@@ -17,9 +17,9 @@
 #include <limits>
 
 #include "../../util/BookmarkFile.h"
-#include "BookTranslatorActivity.h"
+#include "modules/lingua/activities/BookTranslationActivity.h"
 #include "BookmarkEntry.h"
-#include "ChapterTranslatorActivity.h"
+#include "modules/lingua/activities/ChapterTranslationActivity.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "DictionaryWordSelectActivity.h"
@@ -30,7 +30,7 @@
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
-#include "LinguaSubmenuActivity.h"
+#include "modules/lingua/activities/LinguaSubmenuActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
@@ -846,9 +846,9 @@ void EpubReaderActivity::launchTranslation(const LinguaResult kind) {
     epub.reset();
   }
   if (kind == LinguaResult::TRANSLATE_BOOK) {
-    activityManager.replaceActivity(std::make_unique<BookTranslatorActivity>(renderer, mappedInput, epubPath));
+    activityManager.replaceActivity(std::make_unique<BookTranslationActivity>(renderer, mappedInput, epubPath));
   } else {
-    activityManager.replaceActivity(std::make_unique<ChapterTranslatorActivity>(
+    activityManager.replaceActivity(std::make_unique<ChapterTranslationActivity>(
         renderer, mappedInput, epubPath, spineIndex, translatedPath, alreadyTranslated));
   }
 }
