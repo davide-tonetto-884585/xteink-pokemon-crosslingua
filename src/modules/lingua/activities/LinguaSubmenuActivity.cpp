@@ -411,7 +411,7 @@ void LinguaSubmenuActivity::onActionSelected(Action a) {
       return;
 
     // The two LINGUA_SHADE rows. Same contract as the Interleaved colour above -- drawing only --
-    // but reached through the per-role ink (PageFontSet), which readerPageFontSet() rebuilds on
+    // but reached through the per-role ink (PageFontSet), which LinguaReaderIntegration rebuilds on
     // every draw, so the reader repaints in the new colour with no chapter rebuild. Deliberately
     // absent from the reader's re-layout gate; see EpubReaderActivity's LINGUA handler.
     case Action::CYCLE_INTERLINEAR_COLOUR:
@@ -486,7 +486,7 @@ void LinguaSubmenuActivity::cycleTranslationSize(uint8_t& storedSize) {
 
 void LinguaSubmenuActivity::cycleLinguaShade(uint8_t& storedShade) {
   // Black -> Grey -> Light Grey, matching the key order in english.yaml. DRAWING ONLY: the shade
-  // reaches the page through PageFontSet's per-role ink, which CrossPointSettings::readerPageFontSet()
+  // reaches the page through PageFontSet's per-role ink, which LinguaReaderIntegration
   // rebuilds on every draw, so there is nothing to invalidate here -- no section reset, no
   // armReposition, no cache key. requestUpdate() repaints this row's value; the reader repaints in
   // the new colour on its next frame.

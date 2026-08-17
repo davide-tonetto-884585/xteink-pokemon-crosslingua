@@ -391,7 +391,7 @@ int CrossPointSettings::translationFontIdForSize(const uint8_t sizeSetting) cons
 
 int CrossPointSettings::getInterleavedTranslationFontId() const {
   // The one size that is a LAYOUT input. Both the cache key (ReaderRenderSpec::translationFontId)
-  // and the render-time font set (readerPageFontSet) read it through here, so changing it
+  // and LinguaReaderIntegration's render-time font set read it through here, so changing it
   // invalidates exactly the sections whose line breaking it can move, and a page is always drawn in
   // the fonts it was measured with. The overlay sizes deliberately have no path to either.
   //
@@ -410,7 +410,7 @@ int CrossPointSettings::getInterleavedTranslationFontId() const {
 int CrossPointSettings::getInterlinearAnnotationFontId() const {
   // Same shape as getInterleavedTranslationFontId: mode-gated here, because the layout engine only
   // ever sees a LinguaLayout and must not carry mode semantics. Feeds BOTH the section cache key
-  // (ReaderRenderSpec::annotationFontId) and the render-time font set (readerPageFontSet), so an
+  // (ReaderRenderSpec::annotationFontId) and LinguaReaderIntegration's render-time font set, so an
   // annotation row is always drawn in the face it was measured and advanced with.
   //
   // THE single place the annotation face is chosen. SMALL_FONT_ID is the
@@ -460,45 +460,10 @@ bool CrossPointSettings::interlinearAnnotationScriptSupported() const {
   return true;
 }
 
-uint8_t CrossPointSettings::getInterlinearAnnotationInk() const {
-  // Interlinear only; no other mode emits a LineFontRole::Annotation line, so inherit. (Side by
-  // Side's "not translated" marker is editorial furniture too, but it is inline WORDS on a source
-  // line, not an annotation line -- it is set apart by italics, not by ink.)
-  if (translationDisplayMode != LINGUA_INTERLINEAR) return PageFontSet::INK_INHERIT;
-  return interlinearAnnotationShade;  // LINGUA_* values ARE the renderer's ink levels
-}
-
-uint8_t CrossPointSettings::getSideBySideTranslationInk() const {
-  // THE gate that keeps this off Interleaved. Interleaved shares the Translation role (its inline
-  // translated lines are tagged with it whenever a distinct translation font is configured) but
-  // colours them through the per-word TRANSLATED bit and its own translationShade; handing it an
-  // ink here would override that path and silently take over Interleaved's colour row.
-  if (translationDisplayMode != LINGUA_SIDE_BY_SIDE) return PageFontSet::INK_INHERIT;
-  // Reaches the PAIRED translation column and nothing else, because that is the only thing tagged
-  // LineFontRole::Translation under this layout. Translated text that escapes the pairing -- an
-  // unpaired translation paragraph, or a block big enough to trip the mid-block soft flush -- is
-  // main-flow Body and stays black; see currentLineRole() in ChapterHtmlSlimParser.
-  return sideBySideTranslationShade;
-}
-
 int CrossPointSettings::getTooltipTranslationFontId() const { return translationFontIdForSize(tooltipTranslationSize); }
 
 int CrossPointSettings::getPageTranslationOverlayFontId() const {
   return translationFontIdForSize(pageTranslationSize);
-}
-
-PageFontSet CrossPointSettings::readerPageFontSet() const {
-  // The same three ids readerRenderSpec() keys the cache on, read from the same accessors: a page is
-  // always drawn in the fonts it was measured with. Only the two LAYOUT sizes belong here — the
-  // overlays draw outside the Page. Each accessor is mode-gated and returns 0 (-> body font, via the
-  // PageFontSet constructor) for every mode but its own.
-  PageFontSet set(getReaderFontId(), getInterleavedTranslationFontId(), getInterlinearAnnotationFontId());
-  // The per-role INK, resolved the same way and in the same place as the ids. Unlike them it is
-  // pure drawing: it is absent from readerRenderSpec() below by design, so changing a colour
-  // repaints the page that is already cached instead of re-laying the chapter out.
-  set.annotationInk = getInterlinearAnnotationInk();
-  set.translationInk = getSideBySideTranslationInk();
-  return set;
 }
 
 ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWidth,
@@ -543,6 +508,8 @@ float CrossPointSettings::getReaderLineCompression() const {
         return 1.0f;
       case WIDE:
         return 1.1f;
+      case EXTRA_WIDE:
+        return 1.2f;
     }
   }
 
@@ -559,6 +526,8 @@ float CrossPointSettings::getReaderLineCompression() const {
           return 1.0f;
         case WIDE:
           return 1.1f;
+        case EXTRA_WIDE:
+          return 1.2f;
       }
     case NOTOSANS:
       switch (lineSpacing) {
@@ -569,6 +538,8 @@ float CrossPointSettings::getReaderLineCompression() const {
           return 0.95f;
         case WIDE:
           return 1.0f;
+        case EXTRA_WIDE:
+          return 1.05f;
       }
   }
 }

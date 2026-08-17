@@ -76,7 +76,7 @@ void ChapterHtmlSlimParser::renderSideBySide(std::unique_ptr<ParsedText> sourceB
   // languages here, and shrinking one column would break the lockstep row geometry this loop relies
   // on (one shared yPos and one shared advance per row). The translation column is nonetheless
   // tagged LineFontRole::Translation below -- the role is what carries the COLOUR sub-setting, and
-  // it costs nothing in fonts: readerPageFontSet()'s translation slot is 0 under this mode
+  // it costs nothing in fonts: LinguaReaderIntegration's translation slot is 0 under this mode
   // (getInterleavedTranslationFontId is gated to Interleaved), which PageFontSet maps back to the
   // body font. currentLineRole() still answers Body under SideBySide, and must: it serves the main
   // flow, where a translated block only ever lands via the soft-flush escape, not via this pairing.

@@ -117,8 +117,21 @@ LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleInterlinearI
 }
 
 PageFontSet LinguaReaderIntegration::pageFontSet() const {
-  PageFontSet fonts = SETTINGS.readerPageFontSet();
-  fonts.annotationVisible = modes_.interlinear().translationVisible();
+  return resolvePageFontSet(modes_.interlinear().translationVisible());
+}
+
+void LinguaReaderIntegration::configureRenderer(GfxRenderer& renderer) {
+  const auto mode = static_cast<CrossPointSettings::LINGUA_MODE>(SETTINGS.translationDisplayMode);
+  renderer.setTranslationGrayLevel(InterleavedMode::translatedWordInk(mode, SETTINGS.translationShade));
+}
+
+PageFontSet LinguaReaderIntegration::resolvePageFontSet(const bool annotationVisible) {
+  const auto mode = static_cast<CrossPointSettings::LINGUA_MODE>(SETTINGS.translationDisplayMode);
+  PageFontSet fonts(SETTINGS.getReaderFontId(), SETTINGS.getInterleavedTranslationFontId(),
+                    SETTINGS.getInterlinearAnnotationFontId());
+  fonts.annotationInk = InterlinearMode::annotationInk(mode, SETTINGS.interlinearAnnotationShade);
+  fonts.translationInk = SideBySideMode::translationInk(mode, SETTINGS.sideBySideTranslationShade);
+  fonts.annotationVisible = annotationVisible;
   return fonts;
 }
 

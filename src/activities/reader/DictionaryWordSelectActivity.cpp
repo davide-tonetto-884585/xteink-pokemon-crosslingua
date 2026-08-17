@@ -13,6 +13,7 @@
 #include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "components/UITheme.h"
+#include "modules/lingua/reader/LinguaReaderIntegration.h"
 
 namespace {
 
@@ -41,7 +42,7 @@ void indexBuildYield(void*) { vTaskDelay(1); }
 
 void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
-  pageFonts = SETTINGS.readerPageFontSet();
+  pageFonts = LinguaReaderIntegration::resolvePageFontSet();
   fontId = pageFonts.body;
   // No null check: a failed allocation just disables the differential
   // fast path (drawHighlightWithSnapshot skips the read), keeping the

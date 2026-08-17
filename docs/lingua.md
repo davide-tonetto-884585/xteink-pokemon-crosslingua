@@ -1,5 +1,9 @@
 # Lingua
 
+Lingua is available on every CrossLingua target: Xteink X3, X4, X4 Pro, and
+M5Stack Paper Mono. The same translation modes and workflows are shared across
+the button-only and touch/frontlight devices.
+
 Lingua is CrossLingua's bilingual reading system. It can produce a bilingual
 copy of any EPUB on the device or use language-tagged translations already
 embedded by a Calibre workflow. The current code provides eight display modes:

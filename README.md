@@ -9,8 +9,9 @@ the device or prepare it with the
 [Ebook Translator Calibre plugin](https://github.com/bookfere/Ebook-Translator-Calibre-Plugin),
 then choose how much of each language you want to see.
 
-**Runs on:** ESP32-C3-based Xteink [X3](https://www.xteink.com/products/xteink-x3),
-and [X4](https://www.xteink.com/products/xteink-x4).
+**Runs on:** Xteink [X3](https://www.xteink.com/products/xteink-x3),
+[X4](https://www.xteink.com/products/xteink-x4), X4 Pro, and M5Stack Paper Mono.
+X4 Pro and Paper Mono builds include their touch, Home-key, and frontlight integrations.
 
 <table>
   <tr>

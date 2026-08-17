@@ -7,6 +7,18 @@ jobs:
   build-release-candidate:
     if: startsWith(github.ref_name, 'release/')
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pio_env: gh_release_rc
+            asset: firmware.bin
+          - pio_env: sticky-gh_release_rc
+            asset: firmware-sticky.bin
+          - pio_env: x4pro-gh_release_rc
+            asset: firmware-x4pro.bin
+          - pio_env: papermono-gh_release_rc
+            asset: firmware-papermono.bin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -14,7 +26,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -23,7 +35,15 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          # platform-espressif32's builder/main.py imports these unconditionally; its own
+          # penv bootstrap (builder/penv_setup.py) is supposed to install them automatically
+          # but isn't picking them up reliably in this runner image, so pin them explicitly.
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -37,38 +57,47 @@ jobs:
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
           echo "BRANCH_SUFFIX=${GITHUB_REF_NAME#release/}" >> $GITHUB_ENV
 
-      - name: Build CrossPoint Release Candidate
+      - name: Build CrossLingua Release Candidate
         env:
           CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
-        run: pio run -e gh_release_rc
+        run: pio run -e ${{ matrix.pio_env }} -j1
 
-      # Mirrors release.yml. Optional for RC testers -- EdsLab is built into the
-      # firmware -- but kept so an updated font cut can be tried without a reflash.
+      - name: Name release asset
+        run: |
+          if [ "${{ matrix.asset }}" != "firmware.bin" ]; then
+            cp ".pio/build/${{ matrix.pio_env }}/firmware.bin" \
+              ".pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}"
+          fi
+
       - name: Install font tools
+        if: matrix.pio_env == 'gh_release_rc'
         run: |
           sudo apt-get update && sudo apt-get install -y libfreetype6-dev
           pip install freetype-py fonttools pyyaml
 
-      - name: Build EdsLab SD card font
-        run: python3 lib/EpdFont/scripts/build-sd-fonts.py --only EdsLab --clean
-
-      - name: Package EdsLab for the SD card
+      - name: Package EdsLab SD card font
+        if: matrix.pio_env == 'gh_release_rc'
         run: |
-          # Extracting this zip at the SD card root yields /fonts/EdsLab/*.cpfont.
+          python3 lib/EpdFont/scripts/build-sd-fonts.py --only EdsLab --clean
           mkdir -p dist/sdcard/fonts/EdsLab
           cp lib/EpdFont/scripts/output/EdsLab/*.cpfont dist/sdcard/fonts/EdsLab/
           cp lib/EpdFont/builtinFonts/source/EdsLab/LICENSE.txt dist/sdcard/fonts/EdsLab/
           (cd dist/sdcard && zip -r ../EdsLab-sdcard-font.zip fonts)
-          ls -l dist/
+
+      - name: Upload EdsLab artifact
+        if: matrix.pio_env == 'gh_release_rc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CrossLingua-RC-${{ env.BRANCH_SUFFIX }}-EdsLab
+          path: dist/EdsLab-sdcard-font.zip
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CrossPoint-RC-${{ env.BRANCH_SUFFIX }}
+          name: CrossLingua-RC-${{ env.BRANCH_SUFFIX }}-${{ matrix.pio_env }}
           path: |
-            .pio/build/gh_release_rc/bootloader.bin
-            .pio/build/gh_release_rc/firmware.bin
-            .pio/build/gh_release_rc/firmware.elf
-            .pio/build/gh_release_rc/firmware.map
-            .pio/build/gh_release_rc/partitions.bin
-            dist/EdsLab-sdcard-font.zip
+            .pio/build/${{ matrix.pio_env }}/bootloader.bin
+            .pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}
+            .pio/build/${{ matrix.pio_env }}/firmware.elf
+            .pio/build/${{ matrix.pio_env }}/firmware.map
+            .pio/build/${{ matrix.pio_env }}/partitions.bin

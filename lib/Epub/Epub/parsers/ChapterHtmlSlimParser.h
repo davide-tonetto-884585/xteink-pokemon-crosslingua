@@ -210,7 +210,7 @@ class ChapterHtmlSlimParser {
   // (currentBlockIsTranslated), so the parser keeps exactly one notion of "translated".
   LineFontRole currentLineRole() const;
   // The font id a role is MEASURED and ADVANCED with. Built through the same PageFontSet resolver
-  // the renderer uses, with the same slots CrossPointSettings::readerPageFontSet() fills, so a line
+  // the renderer uses, with the same slots LinguaReaderIntegration::resolvePageFontSet() fills, so a line
   // is laid out with precisely the id it will later be drawn with — the role byte is all that
   // crosses the section cache.
   int fontIdForRole(const LineFontRole role) const {

@@ -16,7 +16,7 @@ enum class LineFontRole : uint8_t {
 // How the app resolves a role at render time: the font id per role, and the ink per role.
 //
 // lib/Epub deliberately knows nothing about fontIds.h: it stores roles, the app resolves them.
-// Build one at the app boundary (CrossPointSettings::readerPageFontSet()) so the ids the page is
+// Build one at the app boundary (LinguaReaderIntegration::resolvePageFontSet()) so the ids the page is
 // DRAWN with always come from the same place as the ids it was MEASURED with
 // (ReaderRenderSpec::fontId / translationFontId).
 //

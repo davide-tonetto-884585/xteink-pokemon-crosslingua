@@ -20,6 +20,8 @@ class LinguaReaderIntegration {
   enum class InputAction : uint8_t { None, Consumed, Render, PageBack, PageForward };
 
   InputAction handleInput(MappedInputManager& input, bool hasSection);
+  static void configureRenderer(GfxRenderer& renderer);
+  static PageFontSet resolvePageFontSet(bool annotationVisible = true);
   PageFontSet pageFontSet() const;
   void renderOverlay(GfxRenderer& renderer, const Page& page, int xOffset, int yOffset, int viewportWidth,
                      int viewportHeight);
