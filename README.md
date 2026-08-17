@@ -10,8 +10,10 @@ the device or prepare it with the
 then choose how much of each language you want to see.
 
 **Runs on:** Xteink [X3](https://www.xteink.com/products/xteink-x3),
-[X4](https://www.xteink.com/products/xteink-x4), X4 Pro, and M5Stack Paper Mono.
-X4 Pro and Paper Mono builds include their touch, Home-key, and frontlight integrations.
+[X4](https://www.xteink.com/products/xteink-x4), X4 Pro, M5Stack Paper Mono,
+and Seeed Studio XIAO ePaper Display Board (Sticky). X4 Pro, Paper Mono, and
+Sticky use dedicated builds with their device-specific display, touch, key,
+power, and frontlight integrations.
 
 <table>
   <tr>
@@ -228,28 +230,86 @@ USB port or browser before assuming the device is locked. Only reach for the unl
 
 ## Install firmware
 
-### Web installer (recommended)
+### Choose the correct firmware file
+
+Each hardware family has its own release binary. Download the file that exactly
+matches your device from the
+[CrossLingua releases page](https://github.com/ed-fruty/crosslingua-reader/releases):
+
+| Device | Release file | Chip |
+| --- | --- | --- |
+| Xteink X3 / X4 | `firmware.bin` | ESP32-C3 |
+| Xteink X4 Pro | `firmware-x4pro.bin` | ESP32-S3 |
+| M5Stack Paper Mono | `firmware-papermono.bin` | ESP32-S3 |
+| Seeed Studio XIAO ePaper Display Board (Sticky) | `firmware-sticky.bin` | ESP32-S3 |
+
+> [!WARNING]
+> Never flash a binary intended for another device. CrossLingua validates the
+> chip and board identity during in-device updates, but external flashing tools
+> may not provide the same protection.
+
+### Update from an existing CrossLingua installation (recommended)
+
+Connect the device to Wi-Fi, then open **Settings → System → Check for
+updates**. The built-in OTA updater checks the latest CrossLingua release and
+automatically selects the correct file for the detected hardware, so you do
+not need to download or choose a `.bin` manually. Confirm the update when
+prompted, keep the device powered while it is installing, and wait for it to
+restart.
+
+To update from an SD card instead:
+
+1. Download the matching file from the table above.
+2. Copy it anywhere on the SD card.
+3. Open the firmware update option on the device and select the downloaded
+   `.bin` file.
+4. Confirm the update and keep the device powered until it restarts.
+
+The SD-card picker accepts any `.bin` filename, so files such as
+`firmware-x4pro.bin` do **not** need to be renamed to `firmware.bin`.
+
+### Web installer — Xteink X3 / X4
+
+The web-flasher procedure below is for Xteink X3 and X4 only. Do not select an
+X3/X4 profile for X4 Pro, Paper Mono, or Sticky.
 
 1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Download a `firmware.bin` from the
+2. Download `firmware.bin` from the
    [CrossLingua releases page](https://github.com/ed-fruty/crosslingua-reader/releases).
 3. Open https://crosspointreader.com/#flash-tools, select X3 or X4, choose
    **Custom .bin**, and upload the downloaded firmware.
 
-### Web installer (specific version)
+To install a specific version, download `firmware.bin` from that version's
+release instead of the latest release and follow the same steps.
 
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Download a `firmware.bin` from
-   [CrossLingua Releases](https://github.com/ed-fruty/crosslingua-reader/releases),
-   a local build, or a continuous integration artifact.
-3. Go to https://crosspointreader.com/#flash-tools, select X3 or X4, click
-   **Custom .bin**, and upload a `firmware.bin`.
+Some Xteink devices purchased from third-party stores must be unlocked first;
+see [USB-locked devices](#usb-locked-devices-xteink-unlocker).
+
+### First installation on X4 Pro, Paper Mono, or Sticky
+
+The X3/X4 web-flasher and ESP32-C3 command below are not compatible with these
+ESP32-S3 devices. If CrossPoint or CrossLingua is already installed, use its
+SD-card firmware updater with the matching release file. For development or a
+first installation from source, use the corresponding PlatformIO environment:
+
+```bash
+pio run -e x4pro -t upload       # Xteink X4 Pro
+pio run -e papermono -t upload   # M5Stack Paper Mono
+pio run -e sticky -t upload      # Seeed Sticky
+```
+
+Connect only the target device while uploading. Board-specific USB boot mode,
+drivers, and connection steps depend on the hardware revision; follow the
+device manufacturer's instructions if PlatformIO cannot detect it.
 
 ### Revert to Official Firmware
 
 To revert to the official firmware, you can also flash the latest official firmware using https://crosspointreader.com/#flash-tools.
 
-### Command line
+### Command line — Xteink X3 / X4 only
+
+This command writes the shared X3/X4 ESP32-C3 application image. Do not use it
+for X4 Pro, Paper Mono, or Sticky.
 
 1. Install [`esptool`](https://github.com/espressif/esptool):
 
@@ -257,7 +317,7 @@ To revert to the official firmware, you can also flash the latest official firmw
 pip install esptool
 ```
 
-2. Download `firmware.bin` from the
+2. Download the X3/X4 `firmware.bin` from the
    [CrossLingua releases page](https://github.com/ed-fruty/crosslingua-reader/releases).
 3. Connect your device via USB-C.
 4. Find the device port. On Linux, run `dmesg` after connecting. On macOS:
