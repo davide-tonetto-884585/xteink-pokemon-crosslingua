@@ -6,7 +6,6 @@
 #include <I18n.h>
 #include <Logging.h>
 
-#include <cstdio>
 #include <cstring>
 #include <string>
 #include <variant>
@@ -167,9 +166,11 @@ void LinguaSubmenuActivity::appendModeChildren() {
       child(Action::CYCLE_SIDE_BY_SIDE_COLOUR, StrId::STR_TRANSLATION_COLOUR);
       return;
     case CrossPointSettings::LINGUA_INTERLINEAR:
-      // Colours the ANNOTATION ROWS only. Size is still fixed at the small UI face in v1 (see
-      // getInterlinearAnnotationFontId). The reveal controls below are drawing/input-only too.
+      // Colours the ANNOTATION ROWS only; the reveal controls below are drawing/input-only. Size is
+      // the one row here that is a LAYOUT input (see getInterlinearAnnotationFontId), so it sits
+      // directly under Colour, matching the Colour-then-Size order of the other modes' blocks.
       child(Action::CYCLE_INTERLINEAR_COLOUR, StrId::STR_TRANSLATION_COLOUR);
+      child(Action::CYCLE_INTERLINEAR_SIZE, StrId::STR_TRANSLATION_SIZE);
       child(Action::CYCLE_INTERLINEAR_TOGGLE_LONG_PRESS, StrId::STR_TOGGLE_BY_LONGPRESS);
       child(Action::CYCLE_INTERLINEAR_TOGGLE_BUTTONS, StrId::STR_TOGGLE_BUTTONS);
       return;
@@ -448,6 +449,17 @@ void LinguaSubmenuActivity::onActionSelected(Action a) {
       cycleTranslationSize(SETTINGS.pageTranslationSize);
       return;
 
+    // Its own cycle, not cycleTranslationSize(): the value space is INTERLINEAR_ANNOTATION_SIZE and
+    // every option is always available, so there is no smaller-face guard to apply. Like the
+    // Interleaved size this is a LAYOUT input — it reaches ReaderRenderSpec::annotationFontId — and
+    // the reader's result handler re-lays the section out on the layoutEquals() comparison.
+    case Action::CYCLE_INTERLINEAR_SIZE:
+      SETTINGS.interlinearAnnotationSize = static_cast<uint8_t>((SETTINGS.interlinearAnnotationSize + 1) %
+                                                                CrossPointSettings::INTERLINEAR_ANNOTATION_SIZE_COUNT);
+      SETTINGS.saveToFile();
+      requestUpdate();
+      return;
+
     case Action::ENTER_API_KEY: {
       // Use the existing on-screen keyboard activity. Persist on confirm; ignore
       // on cancel. Password input mode masks the field while typing.
@@ -560,6 +572,33 @@ const char* LinguaSubmenuActivity::translationSizeLabel(const uint8_t storedSize
   return I18N.get(smaller ? StrId::STR_SIZE_SMALLER : StrId::STR_SIZE_SAME);
 }
 
+const char* LinguaSubmenuActivity::interlinearSizeLabel() const {
+  // Asks the RESOLVER rather than re-deriving the rule: font id 0 is its "same as the body font"
+  // answer, which covers both an explicit ANNOTATION_BODY and a target script the small face cannot
+  // cover — and a degraded row must read as what the page is actually drawn in. The stored point size
+  // is left alone, exactly as translationSizeLabel() leaves a dormant Smaller alone: pick a supported
+  // target language and the choice is back, with no SPIFFS write spent erasing it. Sound here because
+  // this row only exists while the mode IS Interlinear (see appendModeChildren), which is the
+  // resolver's other reason to return 0.
+  if (SETTINGS.getInterlinearAnnotationFontId() == 0) return I18N.get(StrId::STR_SIZE_SAME);
+  // "pt" is deliberately not translated, for the reason TextSettingsActivity's size list gives: it is
+  // the typographic unit symbol, written the same way in every language CrossPoint ships. String
+  // literals, so there is nothing to format and nothing to store — ListItem::value borrows a pointer
+  // and these live in flash for the life of the program.
+  switch (static_cast<CrossPointSettings::INTERLINEAR_ANNOTATION_SIZE>(SETTINGS.interlinearAnnotationSize)) {
+    case CrossPointSettings::ANNOTATION_10PT:
+      return "10 pt";
+    case CrossPointSettings::ANNOTATION_12PT:
+      return "12 pt";
+    case CrossPointSettings::ANNOTATION_BODY:
+      return I18N.get(StrId::STR_SIZE_SAME);
+    case CrossPointSettings::ANNOTATION_8PT:
+    case CrossPointSettings::INTERLINEAR_ANNOTATION_SIZE_COUNT:
+      break;
+  }
+  return "8 pt";  // ANNOTATION_8PT, and the out-of-range answer
+}
+
 const char* LinguaSubmenuActivity::engineLabel() const {
   // Positional: index == CrossPointSettings::TRANSLATION_ENGINE value. Append only.
   static const StrId labels[] = {
@@ -633,6 +672,14 @@ void LinguaSubmenuActivity::syncRowItems() {
     if (menuItems[i].isChild && !headingPlaced) {
       rowItems[i].sectionHeading = displayModeLabel();
       headingPlaced = true;
+    } else if (menuItems[i].action == Action::CYCLE_ENGINE) {
+      // A section in this list is delimited by the NEXT heading, not by an end marker of its own
+      // (fui::list draws a heading before a row and nothing after one), so the mode block needs a
+      // heading AFTER it or its end is invisible and its rows read as part of the rest of the menu.
+      // Engine is the anchor because it is the only row that is always present and always the first
+      // one past the block — pinning the heading to a position instead would move it whenever the
+      // engine's API-key row appears or the mode's child count changes.
+      rowItems[i].sectionHeading = I18N.get(StrId::STR_TRANSLATION_SECTION);
     }
   }
   // Keep the cursor inside the (potentially shorter) list after a delete or a mode change.
@@ -668,6 +715,8 @@ const char* LinguaSubmenuActivity::rowValue(const int index) {
       return translationSizeLabel(SETTINGS.tooltipTranslationSize);
     case Action::CYCLE_PAGE_TRANSLATION_SIZE:
       return translationSizeLabel(SETTINGS.pageTranslationSize);
+    case Action::CYCLE_INTERLINEAR_SIZE:
+      return interlinearSizeLabel();
     case Action::PICK_TARGET_LANG:
       return targetLangLabel();
     case Action::PICK_SOURCE_LANG:
@@ -724,6 +773,14 @@ void LinguaSubmenuActivity::drawChrome() {
 }
 
 void LinguaSubmenuActivity::render(RenderLock&& lock) {
+  // Popup FIRST, and it OWNS the frame — the same early return every other OptionPopup host uses
+  // (SettingsActivity, TextSettingsActivity, StatusBarSettingsActivity, EpubReaderMenuActivity...).
+  // The popup paints over the retained framebuffer without clearing it, so moving the highlight is
+  // ONE flush. Running the base render first instead flushed twice per press — the cleared list
+  // WITHOUT the popup, then the same list WITH it — which on e-ink reads as the dialog blinking out
+  // and back on every press.
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+
   // List, header and button hints, in the base's order (it also re-runs the build when wrapped
   // labels shrank the page).
   UiListActivity::render(std::move(lock));
@@ -733,6 +790,4 @@ void LinguaSubmenuActivity::render(RenderLock&& lock) {
     // overflows drawPopup's single-line box; wrap it to the viewable area instead. Flushes itself.
     drawWrappedPopup(renderer, toastMessage);
   }
-
-  optionPopup.processRender(renderer, mappedInput);
 }

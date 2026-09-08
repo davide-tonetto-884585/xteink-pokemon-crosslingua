@@ -286,6 +286,31 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // VALUE STABILITY: persisted as an integer; 0/1 are fixed — append only, never renumber.
   enum TRANSLATION_SIZE : uint8_t { SIZE_SAME = 0, SIZE_SMALLER = 1, TRANSLATION_SIZE_COUNT };
 
+  // Lingua: type size of Interlinear's ANNOTATION ROWS. Its own value space, NOT TRANSLATION_SIZE:
+  // that enum is relative to the body text ("same" / "one step down the reader ladder"), while these
+  // rows have never been on the reader ladder at all -- they are a fixed small UI face sitting above
+  // a source line, so the meaningful choice is an absolute point size, not a relation.
+  //
+  // The three point sizes resolve to the UI faces registered unconditionally in main.cpp
+  // (SMALL_FONT_ID / UI_10_FONT_ID / UI_12_FONT_ID), so no build carries a font for this row that it
+  // did not already carry: all three are the everyday menu faces, they live in flash as static const
+  // bitmaps, and EpdFont holds nothing but a pointer to them. ANNOTATION_BODY is font id 0, the
+  // "same as the body font" signal that this resolver already returns for an unsupported script.
+  //
+  // SCRIPT COVERAGE is identical across the three: edslab_ui_8/10/12 are generated from the same
+  // fontconvert source list (EdsLab + Noto Hebrew/Arabic + Ubuntu Vietnamese), so
+  // interlinearAnnotationScriptSupported() gates all of them with one predicate.
+  // LAYOUT INPUT: unlike the shade, the size changes line breaking and row height, so it reaches
+  // ReaderRenderSpec::annotationFontId and the section cache. See getInterlinearAnnotationFontId().
+  // VALUE STABILITY: persisted as an integer; append only, never renumber.
+  enum INTERLINEAR_ANNOTATION_SIZE : uint8_t {
+    ANNOTATION_8PT = 0,  // the pre-existing fixed face, and still the default
+    ANNOTATION_10PT = 1,
+    ANNOTATION_12PT = 2,
+    ANNOTATION_BODY = 3,  // the reader's own font, whatever family and size that is
+    INTERLINEAR_ANNOTATION_SIZE_COUNT
+  };
+
   // Lingua feature: translation backend selection
   // Values match upstream fork (crosspoint-reader) to keep JSON-stored indices stable.
   // VALUE STABILITY: persisted as an integer — append only, never renumber.
@@ -473,6 +498,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // well in the other. Both default to Black, i.e. exactly what each mode drew before the row
   // existed, so an upgrade changes nothing on screen. See LINGUA_SHADE.
   uint8_t interlinearAnnotationShade = LINGUA_BLACK;
+  // Interlinear annotation row size. Defaults to ANNOTATION_8PT, the face the rows were fixed at
+  // before this row existed, so an upgrade changes nothing on screen. Mirrored in fromJson().
+  uint8_t interlinearAnnotationSize = ANNOTATION_8PT;
   // Interlinear can temporarily hide its annotation rows while keeping their layout space. When
   // enabled, a long press of either button in the selected pair toggles their visibility and takes
   // precedence over the button's normal reader action.
@@ -594,12 +622,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // mode is not Interleaved — the mode gate has to live here rather than in the layout engine,
   // which only ever sees the LinguaLayout that Normal and Interleaved share.
   int getInterleavedTranslationFontId() const;
-  // LAYOUT (Interlinear): the other one that reaches the cache, and THE single place the small
-  // annotation face is chosen — a future user-facing Annotation Size row, or a smaller face merging
-  // from another branch, plugs in here and is picked up by the layout engine, the renderer and the
-  // cache key at once. Returns 0 (= the body font) when the mode is not Interlinear, and also when the
-  // annotation face cannot cover the selected target script, which degrades the rows to body size
-  // instead of a page of replacement glyphs.
+  // LAYOUT (Interlinear): the other one that reaches the cache, and THE single place the annotation
+  // face is chosen — it resolves interlinearAnnotationSize and is picked up by the layout engine, the
+  // renderer and the cache key at once. Returns 0 (= the body font) for ANNOTATION_BODY, when the mode
+  // is not Interlinear, and when the annotation face cannot cover the selected target script, which
+  // degrades the rows to body size instead of a page of replacement glyphs.
   int getInterlinearAnnotationFontId() const;
   // VIEW TIME (Tooltip / Page Translation): composited over an already-laid-out page, so neither may
   // appear in a ReaderRenderSpec — changing one must not invalidate a single cached chapter. Read

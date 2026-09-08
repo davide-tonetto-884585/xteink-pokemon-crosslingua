@@ -72,6 +72,10 @@ class LinguaSubmenuActivity final : public UiListActivity {
     CYCLE_INTERLEAVED_SIZE,
     CYCLE_TOOLTIP_SIZE,
     CYCLE_PAGE_TRANSLATION_SIZE,
+    // Interlinear's annotation row size. A FOURTH size action rather than a reuse of the three
+    // above: its stored field is an absolute point size (INTERLINEAR_ANNOTATION_SIZE), not a
+    // relation to the body text, so it neither shares their value space nor their availability rule.
+    CYCLE_INTERLINEAR_SIZE,
   };
 
   explicit LinguaSubmenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::shared_ptr<Epub> epub,
@@ -166,6 +170,9 @@ class LinguaSubmenuActivity final : public UiListActivity {
   const char* linguaShadeLabel(uint8_t storedShade) const;
   // Value label for any of the three Size rows: pass the mode's own stored TRANSLATION_SIZE.
   const char* translationSizeLabel(uint8_t storedSize) const;
+  // Value label for Interlinear's Size row. Not translationSizeLabel(): different value space, and
+  // the point sizes are unit-suffixed numerals rather than translated words.
+  const char* interlinearSizeLabel() const;
   // Writes a masked representation of the API key into `out`.
   void maskedApiKey(char* out, size_t outSize) const;
 

@@ -122,7 +122,10 @@ smaller.
 ### Interlinear
 
 Places compact translated annotations above the source lines they belong to.
-The annotation colour can be Black, Grey, or Light Grey.
+The annotation colour can be Black, Grey, or Light Grey, and the annotation
+size can be 8 pt (the default), 10 pt, 12 pt, or the same size as the book's
+own text. Changing the size re-lays the chapter out, since taller annotation
+rows leave fewer lines for the source text on each page.
 
 ## Mode switching with no translation
 

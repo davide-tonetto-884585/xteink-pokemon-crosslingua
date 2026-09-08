@@ -13,10 +13,10 @@
 #include "I18nKeys.h"
 #include "ReaderFontSizes.h"
 #include "SettingsList.h"
-#include "modules/lingua/activities/LanguagePickerActivity.h"
 #include "fontIds.h"
-#include "modules/lingua/modes/interlinear/InterlinearPairing.h"
+#include "modules/lingua/activities/LanguagePickerActivity.h"
 #include "modules/lingua/modes/LinguaModeRegistry.h"
+#include "modules/lingua/modes/interlinear/InterlinearPairing.h"
 
 namespace {
 
@@ -140,6 +140,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // One colour key per mode that owns one; see the LINGUA_SHADE comment for why they are never
   // folded into translationShade.
   doc["interlinearAnnotationShade"] = interlinearAnnotationShade;
+  doc["interlinearAnnotationSize"] = interlinearAnnotationSize;
   doc["interlinearToggleByLongPress"] = interlinearToggleByLongPress;
   doc["interlinearToggleButtons"] = interlinearToggleButtons;
   doc["sideBySideTranslationShade"] = sideBySideTranslationShade;
@@ -300,11 +301,13 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // established pattern here (see the per-mode sizes below).
   interlinearAnnotationShade = clamp(doc["interlinearAnnotationShade"] | (uint8_t)LINGUA_BLACK,
                                      (uint8_t)LINGUA_SHADE_COUNT, (uint8_t)LINGUA_BLACK);
-  interlinearToggleByLongPress =
-      clamp(doc["interlinearToggleByLongPress"] | (uint8_t)1, (uint8_t)2, (uint8_t)1);
-  interlinearToggleButtons =
-      clamp(doc["interlinearToggleButtons"] | (uint8_t)OVERLAY_BUTTONS_SIDE, (uint8_t)OVERLAY_BUTTONS_COUNT,
-            (uint8_t)OVERLAY_BUTTONS_SIDE);
+  // Absent key adopts ANNOTATION_8PT, the face the rows were fixed at before the row existed, so an
+  // upgrade re-lays out nothing. Mirrors the struct initializer in CrossPointSettings.h.
+  interlinearAnnotationSize = clamp(doc["interlinearAnnotationSize"] | (uint8_t)ANNOTATION_8PT,
+                                    (uint8_t)INTERLINEAR_ANNOTATION_SIZE_COUNT, (uint8_t)ANNOTATION_8PT);
+  interlinearToggleByLongPress = clamp(doc["interlinearToggleByLongPress"] | (uint8_t)1, (uint8_t)2, (uint8_t)1);
+  interlinearToggleButtons = clamp(doc["interlinearToggleButtons"] | (uint8_t)OVERLAY_BUTTONS_SIDE,
+                                   (uint8_t)OVERLAY_BUTTONS_COUNT, (uint8_t)OVERLAY_BUTTONS_SIDE);
   sideBySideTranslationShade = clamp(doc["sideBySideTranslationShade"] | (uint8_t)LINGUA_BLACK,
                                      (uint8_t)LINGUA_SHADE_COUNT, (uint8_t)LINGUA_BLACK);
   // Per-mode translated-text sizes. ArduinoJson's `|` yields its right operand when the key is
@@ -423,15 +426,27 @@ int CrossPointSettings::getInterlinearAnnotationFontId() const {
   // (ReaderRenderSpec::annotationFontId) and LinguaReaderIntegration's render-time font set, so an
   // annotation row is always drawn in the face it was measured and advanced with.
   //
-  // THE single place the annotation face is chosen. SMALL_FONT_ID is the
-  // multilingual EdsLab UI cut registered unconditionally at startup, so it is
-  // also available in the slim build.
+  // THE single place the annotation face is chosen. All three point sizes map to UI faces registered
+  // unconditionally at startup (src/main.cpp), so no build gains a font for this setting that it did
+  // not already carry and the slim build has every option; SD-card font families register their own
+  // faces under the same ids (SdCardFontSystem), so this follows the active family there too.
   if (translationDisplayMode != LINGUA_INTERLINEAR) return 0;
+  // ANNOTATION_BODY is checked BEFORE the script gate: the gate's whole job is to fall back to the
+  // body font, which is exactly what this option asks for, so an unsupported target must not make
+  // an explicit "same as the body text" choice look like a degradation.
+  if (interlinearAnnotationSize == ANNOTATION_BODY) return 0;
   if (!interlinearAnnotationScriptSupported()) return 0;
-  // v1: the 8pt UI face. Registered unconditionally at startup (src/main.cpp), so no new font
-  // loading and the slim build has it; SD-card font families register their own 8pt face under the
-  // same id (SdCardFontSystem), so this follows the active family there too.
-  return SMALL_FONT_ID;
+  switch (static_cast<INTERLINEAR_ANNOTATION_SIZE>(interlinearAnnotationSize)) {
+    case ANNOTATION_10PT:
+      return UI_10_FONT_ID;
+    case ANNOTATION_12PT:
+      return UI_12_FONT_ID;
+    case ANNOTATION_8PT:
+    case ANNOTATION_BODY:
+    case INTERLINEAR_ANNOTATION_SIZE_COUNT:
+      break;
+  }
+  return SMALL_FONT_ID;  // ANNOTATION_8PT, and the out-of-range answer: 8pt is the default
 }
 
 bool CrossPointSettings::interlinearAnnotationScriptSupported() const {
