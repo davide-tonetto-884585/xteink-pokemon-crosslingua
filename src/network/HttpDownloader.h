@@ -46,6 +46,8 @@ class HttpDownloader {
   static constexpr uint32_t MIN_FREE_HEAP_FOR_TLS = 45000;
   static constexpr uint32_t MIN_MAX_ALLOC_FOR_TLS = 20000;
   static constexpr uint32_t MIN_FREE_HEAP_FOR_REUSE = 12000;
+  static constexpr uint32_t MIN_TLS_FREE_HEAP = MIN_FREE_HEAP_FOR_TLS;
+  static constexpr uint32_t MIN_TLS_MAX_ALLOC = MIN_MAX_ALLOC_FOR_TLS;
 
   /**
    * Fetch text content from a URL with optional credentials.
@@ -91,10 +93,15 @@ class HttpDownloader {
 
   /**
    * Download a file to the SD card with optional credentials.
+   *
+   * downgradeRedirectsToHttp rewrites followed redirect targets from https to
+   * http so the bulk transfer skips a second TLS session (and its ~17KB record
+   * buffer — the OOM site on low-heap C3 boards).
    */
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr, bool* cancelFlag = nullptr,
-                                      const std::string& username = "", const std::string& password = "");
+                                      const std::string& username = "", const std::string& password = "",
+                                      bool downgradeRedirectsToHttp = false);
 
   // Last HTTP response code from the most recent post/postJson call. Negative
   // values indicate connection-level failures (bad URL, transport error, or the

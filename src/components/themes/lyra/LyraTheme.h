@@ -69,20 +69,15 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .popupProgressOutlineInverted = false,
                                  .optionPopupItemSpacing = 8,
                                  .optionPopupInnerPadding = 20,
-                                 .optionPopupSelectionHPadding = 16,
                                  .optionPopupSelectionVPadding = 12,
-                                 .optionPopupTitleGap = 16,
-                                 .optionPopupUseSmallFont = true,
-                                 .optionPopupOptionFontBold = false,
-                                 .optionPopupSelectionRadius = 6,
-                                 .optionPopupSelectionLight = true,
-                                 .optionPopupDrawAllRows = false,
                                  .optionPopupDialogSideMargin = 20,
-                                 .optionPopupTitleSeparator = true,
                                  .textFieldHorizontalPadding = 6,
                                  .textFieldNormalThickness = 1,
                                  .textFieldCursorThickness = 3,
-                                 .textFieldLineEndOffset = 0};
+                                 .textFieldLineEndOffset = 0,
+                                 .controlRadius = 6,
+                                 .sheetRadius = 6,
+                                 .capsuleRadius = 6};
 }
 
 class LyraTheme : public BaseTheme {
@@ -91,19 +86,6 @@ class LyraTheme : public BaseTheme {
   void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const override;
   void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,
                      const char* rightLabel = nullptr) const override;
-  void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
-                  bool selected) const override;
-  bool tabIndexFromPoint(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int x, int y,
-                         int& index) const override;
-  int getListRowStep(bool hasSubtitle) const override;
-  int getListPageItems(int contentHeight, bool hasSubtitle) const override;
-  // See BaseTheme::drawList for rowIndented.
-  void drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
-                const std::function<std::string(int index)>& rowTitle,
-                const std::function<std::string(int index)>& rowSubtitle,
-                const std::function<UIIcon(int index)>& rowIcon, const std::function<std::string(int index)>& rowValue,
-                bool highlightValue, const std::function<bool(int index)>& rowDimmed = nullptr,
-                const std::function<bool(int index)>& rowIndented = nullptr) const override;
   void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                        const char* btn4) const override;
   void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const override;
@@ -114,14 +96,5 @@ class LyraTheme : public BaseTheme {
                            const int selectorIndex, bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
                            std::function<bool()> storeCoverBuffer) const override;
   void drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) const;
-  void drawCoverGrid(GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex, int pageOffset,
-                     const std::function<std::string(int)>& getTitle,
-                     const std::function<std::string(int)>& getThumbPath, const std::function<bool(int)>& isDirectory,
-                     const std::function<bool(int)>& isPending) const override;
-  void drawCoverGridSelection(GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex, int pageOffset,
-                              const std::function<std::string(int)>& getTitle,
-                              const std::function<std::string(int)>& getThumbPath,
-                              const std::function<bool(int)>& isDirectory,
-                              const std::function<bool(int)>& isPending) const override;
   bool showsFileIcons() const override { return true; }
 };

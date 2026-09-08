@@ -4,6 +4,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <base64.h>
+#include <esp_wifi.h>
 
 #include <functional>
 #include <string>
@@ -48,6 +49,23 @@ struct Sink {
 bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
+
+// OtaUpdater.cpp already disables WiFi power-save for firmware downloads, but
+// OPDS feed/book fetches never did despite being able to run just as long for
+// a large category. Modem sleep periodically powers the radio down between
+// DTIM beacon intervals, which can drop or stall packets mid-transfer -- more
+// likely to be hit the longer a transfer takes, so small feeds mostly get
+// away with it while a large category consistently doesn't.
+struct WifiPowerSaveGuard {
+  WifiPowerSaveGuard() {
+    esp_err_t err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK) LOG_ERR("HTTP", "Failed to disable WiFi power-save: %d", err);
+  }
+  ~WifiPowerSaveGuard() {
+    esp_err_t err = esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    if (err != ESP_OK) LOG_ERR("HTTP", "Failed to restore WiFi power-save: %d", err);
+  }
+};
 
 #if defined(FREEINK_NET_WOLFSSL)
 // TLS handshakes over wolfSSL are the single biggest heap consumer on this
@@ -108,7 +126,9 @@ bool insufficientHeapForReuse() {
 }
 
 HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std::string& username,
-                                         const std::string& password, Sink& sink, const char* userAgent) {
+                                         const std::string& password, Sink& sink, const char* userAgent,
+                                         bool downgradeRedirectsToHttp) {
+  WifiPowerSaveGuard psGuard;
   std::string url = startUrl;
 
   for (int hop = 0; hop <= MAX_REDIRECTS; ++hop) {
@@ -154,6 +174,13 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
       if (location.empty() || !freeink::SecureHttpClient::resolveUrl(url, location, url)) {
         LOG_ERR("HTTP", "wolfSSL bad redirect: %d", status);
         return HttpDownloader::HTTP_ERROR;
+      }
+      if (downgradeRedirectsToHttp && url.rfind("https://", 0) == 0) {
+        // Fetch the redirect target over plain HTTP. GitHub's release-asset
+        // CDN serves its signed URLs on both schemes, and skipping the second
+        // TLS session removes its ~17KB record buffer — the MEMORY_E /
+        // OOM-abort site on C3 heaps that sit near 45KB free.
+        url.replace(0, 8, "http://");
       }
       continue;
     }
@@ -232,6 +259,7 @@ bool runPostWolf(const std::string& url, const std::string& body, const char* co
 // large/slow files and surfaces a short read directly.
 HttpDownloader::DownloadError runGet(const std::string& url, const std::string& username, const std::string& password,
                                      Sink& sink, const char* userAgent) {
+  WifiPowerSaveGuard psGuard;
   esp_http_client_config_t config = {};
   config.url = url.c_str();
   config.buffer_size = HTTP_RX_BUF;
@@ -412,15 +440,19 @@ bool runPost(const std::string& url, const std::string& body, const char* conten
 // `userAgent` is nullptr for every caller but the ones that must present a specific
 // User-Agent (see HttpDownloader::fetchUrl); nullptr keeps the default CrossPoint UA.
 HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
-                                           const std::string& password, Sink& sink, const char* userAgent = nullptr) {
+                                           const std::string& password, Sink& sink,
+                                           const char* userAgent = nullptr, bool downgradeRedirectsToHttp = false) {
 #if defined(FREEINK_NET_WOLFSSL)
-  return runGetWolf(url, username, password, sink, userAgent);
+  return runGetWolf(url, username, password, sink, userAgent, downgradeRedirectsToHttp);
 #else
+  // esp_http_client follows redirects internally; the downgrade only exists on
+  // the wolfSSL path, where the manual hop loop exposes the Location URL.
+  (void)downgradeRedirectsToHttp;
   return runGet(url, username, password, sink, userAgent);
 #endif
 }
 
-// Same wolfSSL-vs-esp_http_client split as runGetSecure, for POST requests.
+// Translation POST requests stay separate from upstream's download path.
 bool runPostSecure(const std::string& url, const std::string& body, const char* contentType,
                    const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent) {
 #if defined(FREEINK_NET_WOLFSSL)
@@ -474,7 +506,8 @@ bool HttpDownloader::postJson(const std::string& url, const std::string& jsonBod
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
                                                              ProgressCallback progress, bool* cancelFlag,
-                                                             const std::string& username, const std::string& password) {
+                                                             const std::string& username, const std::string& password,
+                                                             bool downgradeRedirectsToHttp) {
   LOG_DBG("HTTP", "Downloading: %s -> %s", url.c_str(), destPath.c_str());
 
   if (Storage.exists(destPath.c_str())) {
@@ -491,7 +524,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   sink.cancelFlag = cancelFlag;
   sink.write = [&file](const uint8_t* data, size_t len) { return file.write(data, len) == len; };
 
-  const DownloadError result = runGetSecure(url, username, password, sink);
+  const DownloadError result = runGetSecure(url, username, password, sink, nullptr, downgradeRedirectsToHttp);
   // Close before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
   // otherwise close only after the remove.
   file.close();

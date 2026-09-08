@@ -9,6 +9,7 @@
 #include "activities/Activity.h"
 #include "modules/lingua/activities/TranslationReturnTarget.h"
 #include "modules/lingua/parsers/TranslationHtmlRewriter.h"
+#include "modules/lingua/ui/LinguaModeChooser.h"
 
 /**
  * Translates ALL chapters of an EPUB sequentially using the streaming translation engine.
@@ -53,7 +54,10 @@ class BookTranslationActivity final : public Activity {
 
   explicit BookTranslationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string epubPath,
                                    TranslationReturnTarget returnTarget = TranslationReturnTarget::READER)
-      : Activity("BookTranslation", renderer, mappedInput), epubPath(std::move(epubPath)), returnTarget(returnTarget) {}
+      : Activity("BookTranslation", renderer, mappedInput),
+        epubPath(std::move(epubPath)),
+        returnTarget(returnTarget),
+        displayModeChooser(renderer) {}
 
   void onEnter() override;
   void onExit() override;
@@ -72,7 +76,8 @@ class BookTranslationActivity final : public Activity {
   // (0..LINGUA_SELECTABLE_MODE_COUNT-1), NOT a raw mode value -- the retired holes at 1/2 make the
   // value range non-contiguous. Seeded from the current SETTINGS.translationDisplayMode via
   // linguaSelectableIndex() when the chooser opens so it starts pre-highlighted.
-  int displayModeSelection = 0;
+  // Owns the selection, viewport and touch routing for that state.
+  LinguaModeChooser displayModeChooser;
 
   // Language selection. sourceLangCode "auto" => engine-side auto-detect.
   std::string sourceLangCode = "auto";

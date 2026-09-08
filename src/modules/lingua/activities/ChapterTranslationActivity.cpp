@@ -543,7 +543,7 @@ void ChapterTranslationActivity::loop() {
         // Success with real content: offer the display-mode chooser so the user can enable a
         // bilingual mode straight away (a passthrough chapter that translated nothing keeps
         // the plain DONE screen). Pre-highlight the current mode.
-        displayModeSelection = static_cast<int>(linguaSelectableIndex(SETTINGS.translationDisplayMode));
+        displayModeChooser.begin(static_cast<int>(linguaSelectableIndex(SETTINGS.translationDisplayMode)));
         state = CHOOSE_DISPLAY_MODE;
       } else {
         state = DONE;
@@ -570,30 +570,25 @@ void ChapterTranslationActivity::loop() {
   // save, mirroring the Lingua submenu) and exits, Back skips and exits. Both exits use the
   // normal return path so the relaunched reader picks up the mode from settings.
   if (state == CHOOSE_DISPLAY_MODE) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
-      displayModeSelection = (displayModeSelection + static_cast<int>(LINGUA_SELECTABLE_MODE_COUNT) - 1) %
-                             static_cast<int>(LINGUA_SELECTABLE_MODE_COUNT);
-      requestUpdate();
-      return;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-      displayModeSelection = (displayModeSelection + 1) % static_cast<int>(LINGUA_SELECTABLE_MODE_COUNT);
-      requestUpdate();
-      return;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      const uint8_t chosen = static_cast<uint8_t>(LINGUA_SELECTABLE_MODES[displayModeSelection]);
-      if (SETTINGS.translationDisplayMode != chosen) {  // guard SPIFFS write on no-op selections
-        SETTINGS.translationDisplayMode = chosen;
-        SETTINGS.saveToFile();
-        LOG_DBG("CHT", "Display mode set to %d after translation", (int)chosen);
+    switch (displayModeChooser.handleInput(mappedInput)) {
+      case LinguaModeChooser::Result::Redraw:
+        requestUpdate();
+        return;
+      case LinguaModeChooser::Result::Picked: {
+        const uint8_t chosen = static_cast<uint8_t>(LINGUA_SELECTABLE_MODES[displayModeChooser.selected()]);
+        if (SETTINGS.translationDisplayMode != chosen) {  // guard SPIFFS write on no-op selections
+          SETTINGS.translationDisplayMode = chosen;
+          SETTINGS.saveToFile();
+          LOG_DBG("CHT", "Display mode set to %d after translation", (int)chosen);
+        }
+        returnToCaller();
+        return;
       }
-      returnToCaller();
-      return;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      returnToCaller();
-      return;
+      case LinguaModeChooser::Result::Cancelled:
+        returnToCaller();
+        return;
+      case LinguaModeChooser::Result::None:
+        return;
     }
     return;
   }
@@ -731,29 +726,4 @@ void ChapterTranslationActivity::render(RenderLock&&) {
   renderer.displayBuffer();
 }
 
-void ChapterTranslationActivity::renderDisplayModeChooser() {
-  renderer.clearScreen();
-
-  // Same header + list + hints layout the Lingua submenu uses, so it stays orientation-aware
-  // in all 4 modes via the UITheme safe area / metrics (no hardcoded pixel coordinates).
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true,
-                                                               /*hasSideButtonHints=*/false);
-
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_CHOOSE_DISPLAY_MODE));
-
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
-
-  // Captureless lambda -> no std::function heap allocation; the row string is built from the
-  // static StrId table each frame (transient, like the submenu's list).
-  GUI.drawList(renderer, Rect{screen.x, contentTop, screen.width, contentHeight},
-               static_cast<int>(LINGUA_SELECTABLE_MODE_COUNT), displayModeSelection,
-               [](int index) -> std::string { return I18N.get(linguaModeLabel(LINGUA_SELECTABLE_MODES[index])); });
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer();
-}
+void ChapterTranslationActivity::renderDisplayModeChooser() { displayModeChooser.render(renderer, mappedInput); }

@@ -14,6 +14,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "activities/RenderLock.h"
+#include "components/CoverGrid.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -598,8 +599,8 @@ void BookShelfActivity::render(RenderLock&&) {
     // Only reachable once the page is fully generated (we snapshot solely when complete), so the
     // cached buffer never captures a stale placeholder.
     memcpy(renderer.getFrameBuffer(), gridBuffer.get(), renderer.getBufferSize());
-    GUI.drawCoverGridSelection(renderer, gridRect, static_cast<int>(entries.size()), static_cast<int>(selectorIndex),
-                               pageOffset, getTitle, getThumbPath, getIsDirectory, getIsPending);
+    drawCoverGridSelection(renderer, gridRect, static_cast<int>(entries.size()), static_cast<int>(selectorIndex),
+                           pageOffset, getTitle, getThumbPath, getIsDirectory, getIsPending);
     renderer.displayBuffer();
     return;
   }
@@ -616,8 +617,8 @@ void BookShelfActivity::render(RenderLock&&) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_BOOKS_FOUND));
   } else {
     // Draw the grid without a selection (selectedIndex = -1) to obtain a clean buffer
-    GUI.drawCoverGrid(renderer, gridRect, static_cast<int>(entries.size()), -1, pageOffset, getTitle, getThumbPath,
-                      getIsDirectory, getIsPending);
+    drawCoverGrid(renderer, gridRect, static_cast<int>(entries.size()), -1, pageOffset, getTitle, getThumbPath,
+                  getIsDirectory, getIsPending);
 
     // Unobtrusive global progress caption in the free left of the header while covers still generate;
     // it disappears once the visible page is complete. Numbers are counts, "Loading" is translated.
@@ -653,8 +654,8 @@ void BookShelfActivity::render(RenderLock&&) {
       // thumb conversion has heap headroom. Selection moves fall back to full redraws until complete.
       freeGridBuffer();
     }
-    GUI.drawCoverGridSelection(renderer, gridRect, static_cast<int>(entries.size()), static_cast<int>(selectorIndex),
-                               pageOffset, getTitle, getThumbPath, getIsDirectory, getIsPending);
+    drawCoverGridSelection(renderer, gridRect, static_cast<int>(entries.size()), static_cast<int>(selectorIndex),
+                           pageOffset, getTitle, getThumbPath, getIsDirectory, getIsPending);
   }
 
   renderer.displayBuffer();
