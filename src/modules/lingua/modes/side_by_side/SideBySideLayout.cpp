@@ -225,12 +225,13 @@ void ChapterHtmlSlimParser::appendSideBySideNoTranslationMarkerIfUnpaired() {
   // already being flushed, no new buffers.
   //
   // ITALICS, not a gray level. The fork dimmed this marker and v2 first copied that by tagging it
-  // EpdFontFamily::TRANSLATED, the per-word bit the renderer maps through modeToGray(). That does
+  // EpdFontFamily::TRANSLATED, the per-word bit the renderer maps through
+  // InterleavedMode::translatedWordInk(). That does
   // not work here, in either direction:
   //   * the bit is a MODE-wide switch. Turning it on for Side by Side also greys the source column
   //     of any book with inline lang= runs, every unpaired translation paragraph, the soft-flush
   //     escape, and the translation column of every chapter cached before it had a line role — see
-  //     the leak list on modeToGray() in src/main.cpp. The marker cannot be singled out.
+  //     the leak list on InterleavedMode::translatedWordInk(). The marker cannot be singled out.
   //   * a LINE role, the vehicle the two Translation Colour sub-settings use, cannot reach it
   //     either: the marker deliberately shares its line with the source text it annotates.
   // Italic is per-word, is set nowhere else on this path, needs no grayscale pass (so it survives

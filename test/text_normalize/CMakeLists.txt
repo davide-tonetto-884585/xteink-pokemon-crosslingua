@@ -5,8 +5,9 @@ add_executable(TextNormalizeTest
   ${REPO_ROOT}/src/modules/lingua/utils/TextNormalize.cpp
 )
 
+# Sources include it as "modules/lingua/utils/TextNormalize.h", so the root is src/.
 target_include_directories(TextNormalizeTest PRIVATE
-  ${REPO_ROOT}/src/modules/lingua/utils
+  ${REPO_ROOT}/src
 )
 
 target_link_libraries(TextNormalizeTest PRIVATE

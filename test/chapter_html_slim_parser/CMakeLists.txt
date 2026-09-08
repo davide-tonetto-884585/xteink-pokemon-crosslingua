@@ -6,10 +6,18 @@ add_executable(ChapterHtmlSlimParserTest
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageDimsProbe.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
+  # The parser's Lingua layout modes live in the module, not next to the parser.
+  ${REPO_ROOT}/src/modules/lingua/layout/LinguaTextFlow.cpp
+  ${REPO_ROOT}/src/modules/lingua/layout/PairedLayoutCoordinator.cpp
+  ${REPO_ROOT}/src/modules/lingua/modes/interlinear/InterlinearLayout.cpp
+  ${REPO_ROOT}/src/modules/lingua/modes/side_by_side/SideBySideLayout.cpp
 )
 
 target_include_directories(ChapterHtmlSlimParserTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  # The parser includes the Lingua interlinear annotation header as
+  # "modules/lingua/...", so src/ is a root here too.
+  ${REPO_ROOT}/src
   ${REPO_ROOT}/lib
   ${REPO_ROOT}/lib/Epub
   ${REPO_ROOT}/lib/Epub/Epub

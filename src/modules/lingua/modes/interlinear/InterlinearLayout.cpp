@@ -3,7 +3,6 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
-#include <I18n.h>
 #include <Logging.h>
 #include <Utf8.h>
 #include <XmlParserUtils.h>

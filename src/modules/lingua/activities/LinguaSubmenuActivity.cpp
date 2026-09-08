@@ -175,7 +175,7 @@ void LinguaSubmenuActivity::appendModeChildren() {
       return;
     // No sub-settings. Normal is NOT "no translated text": it maps to LinguaLayout::Both exactly as
     // Interleaved does, so its pages are byte-identical and do carry the translation inline. What
-    // makes it Normal is the gray level -- modeToGray() (src/main.cpp) hands the renderer 0 for every
+    // makes it Normal is the gray level -- InterleavedMode::translatedWordInk() hands the renderer 0 for every
     // mode except Interleaved, so translated words are drawn in plain black, indistinguishable from
     // the source. Presenting the two languages as one undifferentiated flow is the whole point of the
     // mode, so neither a shade nor a size row belongs on it. Translation Only shows the translation

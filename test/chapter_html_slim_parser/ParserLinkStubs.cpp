@@ -14,7 +14,8 @@ const char* lookupHtmlEntity(const char*, size_t) { return nullptr; }
 bool isExplicitHyphen(uint32_t) { return false; }
 bool isSoftHyphen(uint32_t) { return false; }
 
-std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, bool) { return {}; }
+std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, bool, bool) { return {}; }
+void Hyphenator::setTranslatedLanguage(const std::string&) {}
 
 namespace BidiUtils {
 bool startsWithRtl(const char*, int) { return false; }
@@ -42,12 +43,12 @@ bool ImageToFramebufferDecoder::validateAndStoreDimensions(int64_t, int64_t, Ima
   return false;
 }
 
-void PageLine::render(GfxRenderer&, int, int, int) {}
+void PageLine::render(GfxRenderer&, const PageFontSet&, int, int) {}
 bool PageLine::serialize(HalFile&) { return false; }
 
-void PageImage::render(GfxRenderer&, int, int, int) {}
+void PageImage::render(GfxRenderer&, const PageFontSet&, int, int) {}
 void PageImage::renderPlaceholder(GfxRenderer&, int, int) const {}
 bool PageImage::serialize(HalFile&) { return false; }
 
-void PageHorizontalRule::render(GfxRenderer&, int, int, int) {}
+void PageHorizontalRule::render(GfxRenderer&, const PageFontSet&, int, int) {}
 bool PageHorizontalRule::serialize(HalFile&) { return false; }
