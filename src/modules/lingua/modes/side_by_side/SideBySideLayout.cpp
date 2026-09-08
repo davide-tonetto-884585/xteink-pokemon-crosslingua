@@ -70,6 +70,7 @@ void ChapterHtmlSlimParser::renderSideBySide(std::unique_ptr<ParsedText> sourceB
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
+    currentPageVisibleOffsetSet = false;
   }
 
   // Both columns are laid out AND drawn in the body FONT: the pairing is what distinguishes the two
@@ -97,9 +98,18 @@ void ChapterHtmlSlimParser::renderSideBySide(std::unique_ptr<ParsedText> sourceB
   std::vector<std::shared_ptr<TextBlock>> transLines;
   sourceLines.reserve(8);
   transLines.reserve(8);
+  // Each source line's own offset into the chapter's visible text, kept 1:1 with sourceLines. This
+  // is what a page is stamped with, so a reposition after a mode switch lands on the row the reader
+  // was actually looking at. 4 bytes per line of ONE paragraph, released with the vector below --
+  // a fixed stack array cannot serve it, since a paragraph's line count is unbounded.
+  std::vector<uint32_t> sourceOffsets;
+  sourceOffsets.reserve(8);
   sourceBlock->layoutAndExtractLines(
       renderer, fontId, colWidth,
-      [&sourceLines](const std::shared_ptr<TextBlock>& line) { sourceLines.push_back(line); });
+      [&sourceLines, &sourceOffsets](const std::shared_ptr<TextBlock>& line, const uint32_t offset) {
+        sourceLines.push_back(line);
+        sourceOffsets.push_back(offset);
+      });
   transBlock->layoutAndExtractLines(renderer, fontId, colWidth, [&transLines](const std::shared_ptr<TextBlock>& line) {
     transLines.push_back(line);
   });
@@ -110,15 +120,26 @@ void ChapterHtmlSlimParser::renderSideBySide(std::unique_ptr<ParsedText> sourceB
   if (bs.paddingTop > 0) currentPageNextY += bs.paddingTop;
 
   const size_t maxLines = std::max(sourceLines.size(), transLines.size());
+  // Where the ROW sits in the chapter's visible text. NOT the parser's running visibleTextOffset:
+  // this pairing runs at endElement, by which time that has advanced past the whole paragraph, so
+  // using it stamped every page of a paired chapter with an offset from further down the text. A
+  // translation column longer than its source contributes no text of its own, so its extra rows
+  // keep the last source row's offset.
+  uint32_t rowOffset = sourceOffsets.empty() ? visibleTextOffset : sourceOffsets.front();
   for (size_t i = 0; i < maxLines; i++) {
+    if (i < sourceOffsets.size()) rowOffset = sourceOffsets[i];
     // Page-break check: v2 uses the 3-arg completePageFn + explicit page counter.
     if (currentPageNextY + lineHeight > viewportHeight) {
-      setCurrentPageVisibleOffset(visibleTextOffset);
+      setCurrentPageVisibleOffset(rowOffset);
       completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
       completedPageCount++;
       currentPage.reset(new Page());
       currentPageNextY = 0;
+      // Without this the flag stayed latched for the rest of the chapter, so every later page
+      // reported the FIRST page's offset and a reposition jumped back to the chapter's start.
+      currentPageVisibleOffsetSet = false;
     }
+    setCurrentPageVisibleOffset(rowOffset);
 
     // FOOTNOTES, attributed to the page carrying the anchor exactly as addLineToPage (:1828-1834) does
     // it. SideBySide needs its own copy because a PAIRED paragraph never reaches addLineToPage, and

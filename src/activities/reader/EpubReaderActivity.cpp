@@ -17,9 +17,7 @@
 #include <limits>
 
 #include "../../util/BookmarkFile.h"
-#include "modules/lingua/activities/BookTranslationActivity.h"
 #include "BookmarkEntry.h"
-#include "modules/lingua/activities/ChapterTranslationActivity.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "DictionaryWordSelectActivity.h"
@@ -30,7 +28,6 @@
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
-#include "modules/lingua/activities/LinguaSubmenuActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
@@ -41,6 +38,9 @@
 #include "activities/settings/TextSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "modules/lingua/activities/BookTranslationActivity.h"
+#include "modules/lingua/activities/ChapterTranslationActivity.h"
+#include "modules/lingua/activities/LinguaSubmenuActivity.h"
 #include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"
 
@@ -1124,7 +1124,6 @@ void EpubReaderActivity::renderBook() {
     const bool cacheLoaded = section->loadSectionFile(renderSpec);
     if (cacheLoaded) {
       cachedChapterTotalPageCount = 0;
-      cachedVisibleTextOffset.reset();
     }
     const bool cacheComplete = cacheLoaded && !section->isPartial();
     const bool explicitOffsetJump = pendingOffsetJump.has_value();
