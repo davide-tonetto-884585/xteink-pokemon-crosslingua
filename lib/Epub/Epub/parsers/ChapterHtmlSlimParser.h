@@ -10,14 +10,14 @@
 #include <vector>
 
 #include "Epub/FootnoteEntry.h"
-#include "modules/lingua/modes/interlinear/InterlinearAnnotation.h"
 #include "Epub/PageFontSet.h"
 #include "Epub/ParsedText.h"
-#include "modules/lingua/layout/LinguaLayout.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
 #include "Epub/css/CssStyle.h"
+#include "modules/lingua/layout/LinguaLayout.h"
+#include "modules/lingua/modes/interlinear/InterlinearAnnotation.h"
 
 class Page;
 class GfxRenderer;
@@ -205,6 +205,11 @@ class ChapterHtmlSlimParser {
   // drops, so its words never reach the layout engine. Shared by flushPartWordBuffer (which drops
   // the word) and the <ruby>/<rt> handlers (which must not annotate words that were never added).
   bool wordIsFiltered() const;
+  // Lingua: settle a <br>-opened block's translation state and paragraph index from its first
+  // word. <br/> carries no lang= of its own, so a block it opens is unclassified until content
+  // arrives -- which is where Calibre's plugin puts its translation. Defined in
+  // modules/lingua/layout/LinguaTextFlow.cpp; a no-op on any block not opened by <br>.
+  void classifyBrOpenedBlock();
   // Lingua: the role every line of the currently-open block carries. Reads the SAME
   // block-level translated signal as the per-block hyphenation slot and the word-drop filter
   // (currentBlockIsTranslated), so the parser keeps exactly one notion of "translated".
@@ -311,7 +316,7 @@ class ChapterHtmlSlimParser {
   // reserved whether or not anything is drawn on it, so the page keeps a dead-even
   // annotation/source/annotation/source pitch and no source line ever follows another directly.
   void emitInterlinearPair(const std::vector<InterlinearRun>& runs, const std::shared_ptr<TextBlock>& srcLine,
-                           int stripHeight, int srcRowHeight, int16_t leftInset);
+                           int stripHeight, int srcRowHeight, int16_t leftInset, uint32_t sourceOffset);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
@@ -324,19 +329,18 @@ class ChapterHtmlSlimParser {
   static void XMLCALL endElement(void* userData, const XML_Char* name);
 
  public:
-  explicit ChapterHtmlSlimParser(std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer,
-                                 const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                 const uint16_t viewportHeight, const bool hyphenationEnabled,
-                                 const bool focusReadingEnabled,
-                                 const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
-                                 const bool embeddedStyle, const std::string& contentBase,
-                                 const std::string& imageBasePath, const uint8_t imageRendering = 0,
-                                 std::vector<std::string> tocAnchors = {},
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
-                                 const LinguaLayout linguaLayout = LinguaLayout::Both, const std::string& bookPrimaryLang = "",
-                                 const int translationFontId = 0, const int annotationFontId = 0,
-                                 const InterlinearPairFn interlinearPairFn = nullptr)
+  explicit ChapterHtmlSlimParser(
+      std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
+      const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+      const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
+      const bool focusReadingEnabled,
+      const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
+      const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
+      const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
+      const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
+      const LinguaLayout linguaLayout = LinguaLayout::Both, const std::string& bookPrimaryLang = "",
+      const int translationFontId = 0, const int annotationFontId = 0,
+      const InterlinearPairFn interlinearPairFn = nullptr)
 
       : epub(epub),
         filepath(filepath),
