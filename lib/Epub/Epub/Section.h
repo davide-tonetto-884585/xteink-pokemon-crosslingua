@@ -98,6 +98,11 @@ class Section {
   // see hasTranslation() for what it answers while unknown and why.
   enum class TranslationPresence : uint8_t { Unknown, No, Yes };
   mutable TranslationPresence translationPresence_ = TranslationPresence::Unknown;
+  // Memoized answer to isTextless(), filled by the SAME scans that resolve translationPresence_ --
+  // the detector reports both from one pass, so knowing this costs no extra read and, crucially, no
+  // second zip inflate on a chapter opened for the first time.
+  enum class TextPresence : uint8_t { Unknown, HasText, Textless };
+  mutable TextPresence textPresence_ = TextPresence::Unknown;
   // `<cache>/html/<spineIndex>.html` -- this spine's unzipped chapter HTML.
   std::string getCachedHtmlPath() const;
   // Inflate the chapter HTML into the per-book html cache if it isn't already there. On success
@@ -159,6 +164,15 @@ class Section {
   // reposition anchor. The reader closes the gap by calling resolveTranslationPresence() inside the
   // build's popup/framebuffer-loan window before it reads the answer for real.
   bool hasTranslation() const;
+  // True when this spine holds NO body text at all -- a cover, a full-page illustration, an
+  // <img>-only plate. Such a chapter can never carry an embedded translation, so hasTranslation()
+  // says "no" about it for a reason that has nothing to do with the book being monolingual; the
+  // reader's per-chapter fallback must NOT read that as "downgrade the display mode".
+  //
+  // Memoized (textPresence_), and resolved by the same scan as hasTranslation()/
+  // resolveTranslationPresence(), so asking costs no I/O of its own. Answers false while unknown --
+  // the safe direction, since it only ever declines to suppress the fallback.
+  bool isTextless() const;
   // True once hasTranslation() is answering from an observation rather than the safe default.
   bool isTranslationPresenceKnown() const { return translationPresence_ != TranslationPresence::Unknown; }
   // Force hasTranslation() to a definitive answer, inflating this spine's chapter HTML if that is

@@ -201,7 +201,7 @@ void LinguaReaderIntegration::drawTransientUi(GfxRenderer& renderer) const {
 bool LinguaReaderIntegration::prepareSection(Section& section) {
   if (SETTINGS.translationDisplayMode == CrossPointSettings::LINGUA_NORMAL) return false;
   if (!section.isTranslationPresenceKnown()) section.resolveTranslationPresence();
-  if (section.hasTranslation()) return false;
+  if (section.hasTranslation() || section.isTextless()) return false;
 
   SETTINGS.translationDisplayMode = CrossPointSettings::LINGUA_NORMAL;
   SETTINGS.saveToFile();
