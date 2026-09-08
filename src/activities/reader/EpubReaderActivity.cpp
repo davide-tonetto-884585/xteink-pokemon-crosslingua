@@ -1259,7 +1259,6 @@ void EpubReaderActivity::renderBook() {
     const bool cacheLoaded = section->loadSectionFile(renderSpec);
     if (cacheLoaded) {
       cachedChapterTotalPageCount = 0;
-      cachedVisibleTextOffset.reset();
     }
     const bool cacheComplete = cacheLoaded && !section->isPartial();
     const bool explicitOffsetJump = pendingOffsetJump.has_value();

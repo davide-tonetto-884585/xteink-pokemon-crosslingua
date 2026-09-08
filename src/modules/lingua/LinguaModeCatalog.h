@@ -13,16 +13,17 @@
 // post-translation chooser lists — walks LINGUA_SELECTABLE_MODES instead, in the order defined here,
 // which is the order the user sees.
 
-// UI order. Appending a mode here (and to LINGUA_MODE) is all a new mode needs to appear
-// in every list and cycle.
+// UI order. Adding a mode here (and to LINGUA_MODE) is all a new mode needs to appear in every
+// list and cycle. Only the ORDER of this table is user-visible -- the persisted values in
+// LINGUA_MODE never move, so reordering here cannot change what an existing setting means.
 //
-// LINGUA_INTERLINEAR is LAST deliberately: it was added once its layout landed (LinguaLayout::Interlinear),
-// and appending rather than inserting is what keeps every existing user's cycle order unchanged.
+// Interlinear sits second, right after Normal, because it is the mode that reads like a book with
+// help rather than a two-language document; Interleaved is the heavier of the two and sits last.
 inline constexpr CrossPointSettings::LINGUA_MODE LINGUA_SELECTABLE_MODES[] = {
-    CrossPointSettings::LINGUA_NORMAL,           CrossPointSettings::LINGUA_INTERLEAVED,
+    CrossPointSettings::LINGUA_NORMAL,           CrossPointSettings::LINGUA_INTERLINEAR,
     CrossPointSettings::LINGUA_SIDE_BY_SIDE,     CrossPointSettings::LINGUA_ORIGINAL_ONLY,
     CrossPointSettings::LINGUA_TRANSLATION_ONLY, CrossPointSettings::LINGUA_TOOLTIP,
-    CrossPointSettings::LINGUA_PAGE_TRANSLATION, CrossPointSettings::LINGUA_INTERLINEAR,
+    CrossPointSettings::LINGUA_PAGE_TRANSLATION, CrossPointSettings::LINGUA_INTERLEAVED,
 };
 
 inline constexpr size_t LINGUA_SELECTABLE_MODE_COUNT =

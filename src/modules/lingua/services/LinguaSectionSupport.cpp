@@ -38,10 +38,11 @@ bool Section::hasTranslation() const {
   // that has ever been built answers from disk here.
   const std::string htmlPath = getCachedHtmlPath();
   if (Storage.exists(htmlPath.c_str())) {
-    translationPresence_ = lingua::content::htmlHasTranslatedBlock(htmlPath, epub->getLanguage())
-                               ? TranslationPresence::Yes
-                               : TranslationPresence::No;
-    return translationPresence_ == TranslationPresence::Yes;
+    bool textless = false;
+    const bool translated = lingua::content::htmlHasTranslatedBlock(htmlPath, epub->getLanguage(), &textless);
+    translationPresence_ = translated ? TranslationPresence::Yes : TranslationPresence::No;
+    textPresence_ = textless ? TextPresence::Textless : TextPresence::HasText;
+    return translated;
   }
   // Not knowable without inflating the spine, which is not this function's call to make. Stay
   // Unknown (so the next call re-resolves) and answer in the safe direction -- see Section.h.
@@ -64,14 +65,23 @@ void Section::resolveTranslationPresence() {
     LOG_DBG("SCT", "Could not inflate spine %d to resolve translation presence", spineIndex);
     return;  // stays Unknown -> hasTranslation() keeps answering in the safe direction
   }
-  translationPresence_ = lingua::content::htmlHasTranslatedBlock(parsePath, epub->getLanguage())
+  bool textless = false;
+  translationPresence_ = lingua::content::htmlHasTranslatedBlock(parsePath, epub->getLanguage(), &textless)
                              ? TranslationPresence::Yes
                              : TranslationPresence::No;
+  textPresence_ = textless ? TextPresence::Textless : TextPresence::HasText;
   if (!promoted) {
     // An un-promoted temp is nobody's to keep: startBuild() would re-inflate it under its own
     // ownership rules, and leaving it would strand a stale ".tmp_<n>.html" in the cache dir.
     Storage.remove(parsePath.c_str());
   }
+}
+
+bool Section::isTextless() const {
+  // Both scan sites record textPresence_, so a caller that has already resolved translation
+  // presence -- which every caller does, the fallback gate included -- answers from memory here.
+  // Unknown means no scan has run (or the inflate failed): answer false, the safe direction.
+  return textPresence_ == TextPresence::Textless;
 }
 
 LinguaLayout Section::effectiveLayout(const LinguaLayout requested, const bool translatedSource) {

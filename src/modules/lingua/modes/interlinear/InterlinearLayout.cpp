@@ -342,7 +342,8 @@ void ChapterHtmlSlimParser::placeInterlinearRow(const std::shared_ptr<TextBlock>
 
 void ChapterHtmlSlimParser::emitInterlinearPair(const std::vector<InterlinearRun>& runs,
                                                 const std::shared_ptr<TextBlock>& srcLine, const int stripHeight,
-                                                const int srcRowHeight, const int16_t leftInset) {
+                                                const int srcRowHeight, const int16_t leftInset,
+                                                const uint32_t sourceOffset) {
   // ATOMIC FIT, over a FIXED group: exactly one strip plus one source line, every time. The
   // !elements.empty() guard is the one emitHorizontalRule already uses -- an EMPTY page must never be
   // completed or it reaches section.bin as a blank page the reader then displays, and it is also the
@@ -351,12 +352,14 @@ void ChapterHtmlSlimParser::emitInterlinearPair(const std::vector<InterlinearRun
   // fallback to keep.
   const int groupHeight = stripHeight + srcRowHeight;
   if (!currentPage->elements.empty() && currentPageNextY + groupHeight > viewportHeight) {
-    setCurrentPageVisibleOffset(visibleTextOffset);
+    setCurrentPageVisibleOffset(sourceOffset);
     completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
     completedPageCount++;
     currentPage.reset(new Page());
     currentPageNextY = 0;
+    currentPageVisibleOffsetSet = false;
   }
+  setCurrentPageVisibleOffset(sourceOffset);
 
   // THE STRIP. Reserved unconditionally, drawn only if something landed on it. A blank strip emits
   // no PageLine at all -- no arena, no serialized bytes, no render call -- while still advancing y,
@@ -457,6 +460,7 @@ void ChapterHtmlSlimParser::renderInterlinear(std::unique_ptr<ParsedText> origBl
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
+    currentPageVisibleOffsetSet = false;
   }
 
   const int annotationFont = fontIdForRole(LineFontRole::Annotation);
@@ -555,9 +559,14 @@ void ChapterHtmlSlimParser::renderInterlinear(std::unique_ptr<ParsedText> origBl
   // LinguaLayout::OriginalOnly would produce for the same paragraph; the tracked words only ride along.
   std::vector<std::shared_ptr<TextBlock>> srcLines;
   srcLines.reserve(8);
+  std::vector<uint32_t> sourceOffsets;
+  sourceOffsets.reserve(8);
   origBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
-      [&srcLines](const std::shared_ptr<TextBlock>& line) { srcLines.push_back(line); },
+      [&srcLines, &sourceOffsets](const std::shared_ptr<TextBlock>& line, const uint32_t offset) {
+        srcLines.push_back(line);
+        sourceOffsets.push_back(offset);
+      },
       /*includeLastLine=*/true, &sentencePos);
   if (srcLines.empty()) return;
 
@@ -614,7 +623,7 @@ void ChapterHtmlSlimParser::renderInterlinear(std::unique_ptr<ParsedText> origBl
       // Unchanged source pitch, ruby shift included, so furigana headroom survives on annotated
       // lines. Annotation blocks carry no ruby, so a strip's pitch is just the small line height.
       const int srcRowHeight = bodyLineHeight + srcLines[nextLine]->getRubyShift(bodyAscender);
-      emitInterlinearPair(pending, srcLines[nextLine], stripHeight, srcRowHeight, leftInset);
+      emitInterlinearPair(pending, srcLines[nextLine], stripHeight, srcRowHeight, leftInset, sourceOffsets[nextLine]);
       pending.clear();
       pendingRightEdge = 0;
       // The page owns this line now, so release our reference instead of pinning every line of the

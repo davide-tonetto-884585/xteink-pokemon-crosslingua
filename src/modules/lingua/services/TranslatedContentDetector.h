@@ -96,23 +96,19 @@ inline bool isTranslatedLangTag(const char* langAttr, const char* bookPrimaryLan
 
 // Does the chapter HTML at `htmlPath` contain embedded translated content?
 //
-// True iff some BLOCK-level element (paraboundary::isContainerBlockTag -- <p>, <div>, <li>,
-// <blockquote>, <h1>..<h6>) carries a language tag isTranslatedLangTag() calls translated.
-// Both the Calibre-plugin books and CrossPoint's own TranslationHtmlRewriter emit their
-// translations as block elements, so that is where a translation the layouts can actually USE
-// lives.
-//
-// Deliberately narrower than the layout engine, which honours a `lang=` on ANY element (a
-// `<span lang="fr">` inside an English paragraph tags those words translated too). The narrowing
-// only ever errs toward "no translation", i.e. toward LinguaLayout::Both -- under which the parser
-// still tags and styles such a span exactly as before. Widening it to inline elements would be
-// the unsafe direction: one foreign word in an epigraph would let TranslationOnly run and render
-// a near-blank chapter.
+// Recognizes translated container blocks and Calibre's <br/><span lang="..."> form.
+// Inline spans qualify only at the start of a line after <br>, so a foreign word
+// inside an original sentence does not unlock filtering layouts. Document-level
+// language tags on <html>/<body> never qualify.
 //
 // Streaming SAX scan with early exit at the first translated block: a bilingual chapter usually
 // answers within the first paragraph or two. A monolingual one costs a full read of the file.
 // Callers must treat this as a per-chapter-load cost, never a per-frame one -- Section memoizes
 // it for exactly that reason.
-bool htmlHasTranslatedBlock(const std::string& htmlPath, const std::string& bookPrimaryLang);
+// `textless`, when non-null, additionally reports whether the chapter has NO body text at all --
+// an <img>-only cover or plate. True only after a COMPLETE successful scan that found no text
+// and no translation; false on a malformed tail, a read failure, or an unknown book language
+// (which returns before any read). Costs nothing extra: it rides the same single pass.
+bool htmlHasTranslatedBlock(const std::string& htmlPath, const std::string& bookPrimaryLang, bool* textless = nullptr);
 
 }  // namespace lingua::content

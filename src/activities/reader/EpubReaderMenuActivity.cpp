@@ -41,10 +41,12 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool h
   items.clear();
   items.reserve(MAX_MENU_ITEMS);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
+  items.push_back({MenuAction::LINGUA, StrId::STR_LINGUA});
+  // Below Lingua: this row only exists on a chapter that HAS footnotes, so keeping it above would
+  // shift every following row down on some chapters and not others.
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
-  items.push_back({MenuAction::LINGUA, StrId::STR_LINGUA});
   if (hasBookmarks) {
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }

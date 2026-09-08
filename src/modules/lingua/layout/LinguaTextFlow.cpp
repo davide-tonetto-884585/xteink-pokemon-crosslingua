@@ -24,6 +24,40 @@
 #include "fontIds.h"
 #include "modules/lingua/services/TranslatedContentDetector.h"
 
+// Lingua: settle the translation state and paragraph index of a block that was opened by <br>.
+//
+// A <br/> carries no lang= attribute, so startElement's block-open stamping has nothing to classify
+// the block it creates by -- and Calibre's translation plugin emits exactly that shape:
+//
+//   <p>Original sentence.<br/><span lang="uk">Translated sentence.</span></p>
+//
+// The <span> opens AFTER the break, so the block's language only becomes knowable once its first
+// word arrives. flushPartWordBuffer calls this on every word; everything but the first word of a
+// <br>-opened block falls out on the guard below.
+//
+// The stamping itself mirrors startElement's block-open path exactly, so the parser keeps one rule
+// for paragraph indices: a translated block pairs with the most recent original paragraph
+// (paragraphCounter - 1) and never advances the counter, while an original block claims the next
+// index once -- currentBlockIndexAssigned latches so later words inherit it instead of
+// double-counting. Runs before the word-drop filter, so the block is classified even under a layout
+// that drops its words.
+void ChapterHtmlSlimParser::classifyBrOpenedBlock() {
+  // Only the FIRST word of a still-empty <br>-opened block: partWordBufferIndex > 0 means a real
+  // word is about to land (an empty flush must not consume a paragraph index), and isEmpty() stops
+  // the second and later words of the same block from re-stamping it.
+  if (partWordBufferIndex == 0 || !currentTextBlock || !currentTextBlock->isEmpty()) return;
+  if (!currentTextBlock->getBlockStyle().fromBrElement) return;
+
+  currentBlockIsTranslated = !inlineStyleStack.empty() && inlineStyleStack.back().isTranslatedBlock;
+  if (currentBlockIsTranslated) {
+    currentBlockParagraphIdx = static_cast<int16_t>(paragraphCounter - 1);
+  } else if (!currentBlockIndexAssigned) {
+    currentBlockParagraphIdx = paragraphCounter;
+    paragraphCounter++;
+    currentBlockIndexAssigned = true;
+  }
+}
+
 // Lingua: layout-based block filtering, shared by flushPartWordBuffer and the ruby
 // handlers. Both, SideBySide and Interlinear emit everything (SideBySide pairs the two languages into
 // columns instead of dropping either; Interlinear needs the translated block to become a ParsedText

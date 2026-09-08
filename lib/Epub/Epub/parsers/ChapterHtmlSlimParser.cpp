@@ -329,6 +329,9 @@ void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
 
 // flush the contents of partWordBuffer to currentTextBlock
 void ChapterHtmlSlimParser::flushPartWordBuffer() {
+  // Lingua: a <br>-opened block carries no language of its own; its first word settles it.
+  classifyBrOpenedBlock();
+
   // Lingua: the top of the inline style stack carries whether the word being flushed
   // belongs to a translated block (block-opening and inline tags stamp isTranslatedBlock onto
   // their StyleStackEntry, and children inherit it through nesting).
