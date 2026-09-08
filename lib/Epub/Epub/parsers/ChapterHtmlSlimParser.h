@@ -327,15 +327,27 @@ class ChapterHtmlSlimParser {
   // rows and leaving the rest of the sentence's strips blank. A row never crosses the panel edge and
   // never crosses the ink already on its strip; short of that it is free to run past its band, which
   // is how an over-long translation stretches instead of losing its tail.
+  //
+  // `stream` is the PARAGRAPH's annotation text, owned by the caller and drained from the front:
+  // this call appends the sentence's own words behind whatever the previous sentence could not
+  // place, and leaves its own unplaced tail there for the next one. So the leftover is carried
+  // forward through strips that already exist rather than dropped, and only the caller -- at the end
+  // of the paragraph, where no further strip exists -- can observe a real loss. Passing a stream
+  // that is not empty on entry is the normal case, not an error.
   void buildAnnotationRuns(const InterlinearAnnotation& annotation, const ParsedText& transBlock,
                            const InterlinearBands& bands, uint16_t measureWidth, int annotationFont,
-                           std::vector<InterlinearRun>& runs);
+                           std::vector<InterlinearRun>& runs, ParsedText& stream);
   // Place one already-laid-out row at an absolute y. No page-break test and no y advance -- both
   // belong to the pair, not to a row (see emitInterlinearPair).
   void placeInterlinearRow(const std::shared_ptr<TextBlock>& row, int16_t xPos, int16_t yPos, LineFontRole role);
   // Emit ONE annotation strip plus ONE source line as an atomic, fixed-height group: the strip is
   // reserved whether or not anything is drawn on it, so the page keeps a dead-even
   // annotation/source/annotation/source pitch and no source line ever follows another directly.
+  //
+  // A null `srcLine` emits a TAIL strip: the group is the strip alone, it advances y by stripHeight
+  // only, and it releases no footnote (it carries no source words). That is how a translation too
+  // long for every strip above its paragraph is still drawn instead of being cut -- see the tail
+  // drain at the end of renderInterlinear. srcRowHeight is ignored in that case.
   void emitInterlinearPair(const std::vector<InterlinearRun>& runs, const std::shared_ptr<TextBlock>& srcLine,
                            int stripHeight, int srcRowHeight, int16_t leftInset, uint32_t sourceOffset);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);

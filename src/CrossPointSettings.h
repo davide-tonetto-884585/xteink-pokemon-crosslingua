@@ -303,11 +303,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // LAYOUT INPUT: unlike the shade, the size changes line breaking and row height, so it reaches
   // ReaderRenderSpec::annotationFontId and the section cache. See getInterlinearAnnotationFontId().
   // VALUE STABILITY: persisted as an integer; append only, never renumber.
+  // NO "same as the body font" OPTION, deliberately. It was offered during development and removed
+  // before release: an annotation face as wide as the body text needs about as much room as the
+  // sentence it translates, and a translation is usually LONGER than its source, so every sentence
+  // overflowed its strips. Interlinear answers overflow by carrying the tail forward, which means
+  // that option turned the carry on permanently -- the translation drifted away from its sentence
+  // everywhere, which is the one thing the mode exists to get right. The three point sizes below all
+  // stay narrower than any body size the reader offers (12-18pt), so the carry stays exceptional.
   enum INTERLINEAR_ANNOTATION_SIZE : uint8_t {
     ANNOTATION_8PT = 0,  // the pre-existing fixed face, and still the default
     ANNOTATION_10PT = 1,
     ANNOTATION_12PT = 2,
-    ANNOTATION_BODY = 3,  // the reader's own font, whatever family and size that is
     INTERLINEAR_ANNOTATION_SIZE_COUNT
   };
 

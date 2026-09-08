@@ -6,6 +6,7 @@
 #include <I18n.h>
 #include <Logging.h>
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <variant>
@@ -539,26 +540,49 @@ const char* LinguaSubmenuActivity::pageTranslationButtonsLabel() const {
 // ("Gedimmt hell", "Atténué clair"). The shade IS the renderer's gray level, so each language now
 // names the colour outright — grey / light grey in its own standalone form. STR_PT_DARK /
 // STR_PT_LIGHT stay: linguaModeLabel() still maps the two retired LINGUA_LEGACY_DIMMED* modes to them.
-const char* LinguaSubmenuActivity::translationColourLabel() const {
-  return I18N.get(SETTINGS.translationShade == CrossPointSettings::SHADE_DIMMED_LIGHT ? StrId::STR_SHADE_DIMMED_LIGHT
-                                                                                      : StrId::STR_SHADE_DIMMED);
+const char* LinguaSubmenuActivity::withAntiAliasingNotice(const char* name) {
+  // A grey level is painted by the LSB/MSB plane passes, which the reader runs only when Text
+  // Anti-Aliasing is on (EpubReaderActivity's needsTextGrayscale). With AA off the level is an exact
+  // no-op -- not even a degradation to black -- so the row would otherwise read as a setting that
+  // silently does nothing. The stored choice is deliberately left alone: turn AA on and it applies.
+  //
+  // ONE helper for every colour row in this menu, so Interleaved and the two per-mode LINGUA_SHADE
+  // rows cannot drift apart on whether they warn. Black is the only level that needs no planes, and
+  // its caller returns before reaching here.
+  if (SETTINGS.textAntiAliasing) return name;
+  std::snprintf(shadeLabelText, sizeof(shadeLabelText), "%s — %s", name, I18N.get(StrId::STR_NEEDS_ANTIALIASING));
+  return shadeLabelText;
+}
+
+const char* LinguaSubmenuActivity::translationColourLabel() {
+  // Interleaved offers only grey levels -- Dimmed and Dimmed Light -- so with AA off this row does
+  // nothing whichever value is stored, and BOTH carry the notice.
+  return withAntiAliasingNotice(I18N.get(SETTINGS.translationShade == CrossPointSettings::SHADE_DIMMED_LIGHT
+                                             ? StrId::STR_SHADE_DIMMED_LIGHT
+                                             : StrId::STR_SHADE_DIMMED));
 }
 
 // Same three standalone colour nouns, one of them new. STR_SHADE_BLACK follows the rule the two
 // existing keys were written to (see the comment above translationColourLabel): a value-column
 // entry names the colour outright, so it reads correctly beside every language's word for
 // "colour" — no adjective agreement to get wrong.
-const char* LinguaSubmenuActivity::linguaShadeLabel(const uint8_t storedShade) const {
+const char* LinguaSubmenuActivity::linguaShadeLabel(const uint8_t storedShade) {
+  const char* name = nullptr;
   switch (static_cast<CrossPointSettings::LINGUA_SHADE>(storedShade)) {
     case CrossPointSettings::LINGUA_GREY:
-      return I18N.get(StrId::STR_SHADE_DIMMED);
+      name = I18N.get(StrId::STR_SHADE_DIMMED);
+      break;
     case CrossPointSettings::LINGUA_GREY_LIGHT:
-      return I18N.get(StrId::STR_SHADE_DIMMED_LIGHT);
+      name = I18N.get(StrId::STR_SHADE_DIMMED_LIGHT);
+      break;
     case CrossPointSettings::LINGUA_BLACK:
     case CrossPointSettings::LINGUA_SHADE_COUNT:
       break;
   }
-  return I18N.get(StrId::STR_SHADE_BLACK);  // also the out-of-range answer: Black is the default
+  // Black is also the out-of-range answer, and it is the one level that does not need the grayscale
+  // passes -- so it never carries the notice.
+  if (name == nullptr) return I18N.get(StrId::STR_SHADE_BLACK);
+  return withAntiAliasingNotice(name);
 }
 
 const char* LinguaSubmenuActivity::translationSizeLabel(const uint8_t storedSize) const {
@@ -590,8 +614,6 @@ const char* LinguaSubmenuActivity::interlinearSizeLabel() const {
       return "10 pt";
     case CrossPointSettings::ANNOTATION_12PT:
       return "12 pt";
-    case CrossPointSettings::ANNOTATION_BODY:
-      return I18N.get(StrId::STR_SIZE_SAME);
     case CrossPointSettings::ANNOTATION_8PT:
     case CrossPointSettings::INTERLINEAR_ANNOTATION_SIZE_COUNT:
       break;

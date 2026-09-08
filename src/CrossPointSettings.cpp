@@ -431,10 +431,6 @@ int CrossPointSettings::getInterlinearAnnotationFontId() const {
   // not already carry and the slim build has every option; SD-card font families register their own
   // faces under the same ids (SdCardFontSystem), so this follows the active family there too.
   if (translationDisplayMode != LINGUA_INTERLINEAR) return 0;
-  // ANNOTATION_BODY is checked BEFORE the script gate: the gate's whole job is to fall back to the
-  // body font, which is exactly what this option asks for, so an unsupported target must not make
-  // an explicit "same as the body text" choice look like a degradation.
-  if (interlinearAnnotationSize == ANNOTATION_BODY) return 0;
   if (!interlinearAnnotationScriptSupported()) return 0;
   switch (static_cast<INTERLINEAR_ANNOTATION_SIZE>(interlinearAnnotationSize)) {
     case ANNOTATION_10PT:
@@ -442,7 +438,6 @@ int CrossPointSettings::getInterlinearAnnotationFontId() const {
     case ANNOTATION_12PT:
       return UI_12_FONT_ID;
     case ANNOTATION_8PT:
-    case ANNOTATION_BODY:
     case INTERLINEAR_ANNOTATION_SIZE_COUNT:
       break;
   }

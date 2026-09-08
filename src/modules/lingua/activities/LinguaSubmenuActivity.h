@@ -103,6 +103,10 @@ class LinguaSubmenuActivity final : public UiListActivity {
   // Backing store for the ENTER_API_KEY row's value: ListItem::value borrows, so the masked key
   // needs storage that outlives buildScreen().
   char apiKeyMasked[32]{};
+  // Backing store for a grey shade row's "needs AA" notice; ListItem::value borrows. One buffer is
+  // enough: the Interlinear and Side by Side colour rows belong to different modes, so the menu
+  // never holds both at once.
+  char shadeLabelText[64]{};
   OptionPopup optionPopup;
   // Same press-to-close / release-to-swallow bridge as EpubReaderMenuActivity.
   bool popupClosing = false;
@@ -164,10 +168,14 @@ class LinguaSubmenuActivity final : public UiListActivity {
   const char* overlayButtonsLabel(uint8_t storedButtons) const;
   const char* tooltipBehaviorLabel() const;
   const char* pageTranslationButtonsLabel() const;
-  const char* translationColourLabel() const;
+  const char* translationColourLabel();
+  // Appends the "needs AA" notice to a grey colour name when Text Anti-Aliasing is off. Shared by
+  // every colour row so they cannot disagree about warning; renders into shadeLabelText.
+  const char* withAntiAliasingNotice(const char* name);
   // Value label for either LINGUA_SHADE row: pass the mode's own stored shade. Takes the value
-  // rather than reading a field so the two rows cannot diverge in how they present it.
-  const char* linguaShadeLabel(uint8_t storedShade) const;
+  // rather than reading a field so the two rows cannot diverge in how they present it. Not const:
+  // with Anti-Aliasing off a grey level renders into shadeLabelText with the "needs AA" notice.
+  const char* linguaShadeLabel(uint8_t storedShade);
   // Value label for any of the three Size rows: pass the mode's own stored TRANSLATION_SIZE.
   const char* translationSizeLabel(uint8_t storedSize) const;
   // Value label for Interlinear's Size row. Not translationSizeLabel(): different value space, and

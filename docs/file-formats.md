@@ -90,6 +90,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 46
+
+Version 46 keeps the version 45 serialized layout unchanged. It was bumped
+because a Lingua Interlinear annotation that outruns the strips above its own
+source sentence is now carried forward into the following strips instead of
+being cut, changing the cached page layout of every interlinear chapter.
+
 ### Version 45
 
 Version 45 keeps the version 44 serialized layout unchanged. It was bumped

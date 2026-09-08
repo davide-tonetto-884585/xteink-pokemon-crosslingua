@@ -132,50 +132,19 @@ void buildMergedWordStream(const ParsedText& block, MergedWordStream& out) {
 
 }  // namespace
 
-void ChapterHtmlSlimParser::buildAnnotationRuns(const InterlinearAnnotation& annotation, const ParsedText& transBlock,
-                                                const InterlinearBands& bands, const uint16_t measureWidth,
-                                                const int annotationFont, std::vector<InterlinearRun>& runs) {
-  runs.clear();
-  const size_t slots = bands.slots;
-  // A sentence whose translation is empty contributes no run at all; its slots stay blank.
-  if (annotation.transEndWord <= annotation.transStartWord || slots == 0) return;
-
-  BlockStyle annStyle;
-  // ALWAYS Left. The row is positioned by an x read off the real laid-out source — the source
-  // block's alignment is already baked into that number, so inheriting it here would apply it twice.
-  //
-  // textAlignDefined is deliberately left FALSE. It is read in exactly one place — extractLine's
-  // "resolved RTL + no explicit text-align + Left" rule, which flips the row to Right — and that is
-  // exactly what an RTL TARGET language needs here: the row is laid out at its BAND's width and then
-  // placed as a whole box at the band's start, so flipping it right puts a Hebrew / Arabic / Persian
-  // translation's first glyph on the band's right edge, i.e. on the reading-order start of the span
-  // its source sentence occupies. An RTL SOURCE paragraph never reaches here at all:
-  // renderInterlinear's guard refuses to annotate one.
-  annStyle.alignment = CssTextAlign::Left;
-  // NO first-line indent. Sentence sync used to be an indent on chunk 0, which only works for an LTR
-  // target (an RTL row is measured against `measure - indent` and flipped right, so the indent moved
-  // it backwards, away from its sentence — and resolveFirstLineIndent discarded it anyway, because
-  // isNaturalAlign is false for a Left-aligned RTL block). Placing the whole box at the band start
-  // instead is direction-agnostic and gives every row, not just the first, a band of its own.
-  //
-  // textIndentDefined MUST stay true. With it false and extraParagraphSpacing false,
-  // resolveFirstLineIndent falls through to its three-space default and every row is inset.
-  annStyle.textIndent = 0;
-  annStyle.textIndentDefined = true;
-
-  // extraParagraphSpacing=false keeps resolveFirstLineIndent on the branch that returns the explicit
-  // value above verbatim rather than the paragraph-gap branch. hyphenationEnabled=false keeps a long
-  // compound wrapping early instead of being broken at 8pt, and focusReading is a body-text
-  // affordance that has no business in an annotation.
-  ParsedText annotationText(/*extraParagraphSpacing=*/false, /*hyphenationEnabled=*/false,
-                            /*focusReadingEnabled=*/false, annStyle);
-  // One growth step for the whole span. This block is constructed per SENTENCE, so without it five
-  // parallel vectors double from zero for every sentence of every paragraph on the background build
-  // path — the variable-size DRAM churn the reserve-before-push_back rule exists to prevent. The span
-  // length is the exact token count for every target but CJK, where per-character splitting can add
-  // more and the vectors simply fall back to doubling.
-  annotationText.reserveAdditionalWords(static_cast<size_t>(annotation.transEndWord) -
-                                        static_cast<size_t>(annotation.transStartWord));
+namespace {
+// Queue one annotation's translated words at the BACK of the paragraph's annotation stream. Split
+// out of buildAnnotationRuns so it can also run for a sentence that got no band geometry at all
+// (an unplaced tracked word): those words used to be skipped with the sentence and lost, and the
+// stream is exactly the place they can wait for a strip that does exist.
+void appendAnnotationSpan(const InterlinearAnnotation& annotation, const ParsedText& transBlock, ParsedText& stream) {
+  // One growth step for the appended span. Without it five parallel vectors grow a step for every
+  // sentence of every paragraph on the background build path — the variable-size DRAM churn the
+  // reserve-before-push_back rule exists to prevent.
+  if (annotation.transEndWord > annotation.transStartWord) {
+    stream.reserveAdditionalWords(static_cast<size_t>(annotation.transEndWord) -
+                                  static_cast<size_t>(annotation.transStartWord));
+  }
   for (uint16_t w = annotation.transStartWord; w < annotation.transEndWord && w < transBlock.size(); w++) {
     // REGULAR explicitly: the 8pt family ships a single face, so bold/italic would resolve back to
     // regular anyway, and dropping the inherited EpdFontFamily::TRANSLATED bit keeps the row plain
@@ -188,8 +157,24 @@ void ChapterHtmlSlimParser::buildAnnotationRuns(const InterlinearAnnotation& ann
     // this row for it to attach to, so a span that happens to start mid-run does not open with a
     // stray glue.
     const bool attach = w > annotation.transStartWord && transBlock.wordAttachesToPrevious(w);
-    annotationText.addWord(transBlock.wordAt(w), EpdFontFamily::REGULAR, /*underline=*/false, attach);
+    stream.addWord(transBlock.wordAt(w), EpdFontFamily::REGULAR, /*underline=*/false, attach);
   }
+}
+}  // namespace
+
+void ChapterHtmlSlimParser::buildAnnotationRuns(const InterlinearAnnotation& annotation, const ParsedText& transBlock,
+                                                const InterlinearBands& bands, const uint16_t measureWidth,
+                                                const int annotationFont, std::vector<InterlinearRun>& runs,
+                                                ParsedText& stream) {
+  runs.clear();
+  // Queue first, gate second. Whatever the PREVIOUS sentence could not place is already at the front
+  // of the stream and this sentence's words go behind it, so the append must happen even when this
+  // sentence can place nothing itself — otherwise its text is stranded.
+  appendAnnotationSpan(annotation, transBlock, stream);
+
+  const size_t slots = bands.slots;
+  if (slots == 0) return;
+  ParsedText& annotationText = stream;
   if (annotationText.isEmpty()) return;
 
   const int measure = static_cast<int>(measureWidth);
@@ -267,10 +252,31 @@ void ChapterHtmlSlimParser::buildAnnotationRuns(const InterlinearAnnotation& ann
     width = std::min(width, hardRoom);
     width = std::max(width, 1);
 
+    // LOOK BEFORE CONSUMING, and never hand extractNextLine a width under widestToken.
+    //
+    // Two things go wrong with a slot narrower than the widest token still queued, and both are
+    // unrecoverable once extractNextLine has run, because it calls consumeWords INSIDE itself:
+    //  * computeLineBreaks' oversized-word pre-pass splits that token and APPENDS A HYPHEN -- a
+    //    fabricated "continues overleaf" mark on text that does not continue. It mutates the block,
+    //    so the damage outlives this row: a later, wider row prints the two halves side by side.
+    //  * failing that, the DP force-fits the token past the margin and the row comes back wider than
+    //    its strip, which the clamp below can only answer by dropping already-consumed words.
+    // Holding the width to widestToken is the invariant this function already states it wants; the
+    // `min(width, hardRoom)` below is what used to break it. Skipping the slot instead is safe ONLY
+    // because the text now carries -- it waits for a wider strip, and the tail strips are full
+    // measure, so an unsplittable token always gets somewhere it fits intact. Before the carry the
+    // same skip would have lost it.
+    if (hardRoom < widestToken) continue;
+
     std::shared_ptr<TextBlock> row;
     annotationText.extractNextLine(renderer, annotationFont, static_cast<uint16_t>(width),
                                    [&row](const std::shared_ptr<TextBlock>& line) { row = line; });
-    if (!row || row->wordCount() == 0) continue;  // dropped to an arena OOM: the slot stays blank
+    if (!row || row->wordCount() == 0) {
+      // Only a TextBlock arena OOM reaches here, and the words are already consumed, so this IS a
+      // loss -- logged rather than left to look like an empty slot.
+      LOG_ERR("ILN", "Annotation row lost to arena OOM");
+      continue;
+    }
 
     // Ink extent, scanned rather than read off word 0 and word N-1: an RTL row's x table descends
     // when BidiUtils declines to reorder it, so neither end is at a fixed index.
@@ -297,9 +303,13 @@ void ChapterHtmlSlimParser::buildAnnotationRuns(const InterlinearAnnotation& ann
     if (x < floorX) x = floorX;
     if (x < 0) x = 0;
     if (x + inkRight > measure) {
-      // Unplaceable: a token wider than everything left on this strip. Drawing it would show nothing
-      // legible and cost one GfxRenderer LOG_ERR per out-of-panel pixel.
-      LOG_ERR("ILN", "Annotation row wider than its strip; row dropped");
+      // LAST-RESORT GUARD, and now genuinely last resort: the firstTokenWidth test above rules out
+      // the case this used to fire for (a strip too cramped for the next token), so reaching here
+      // means a single token is wider than the WHOLE measure and no strip anywhere can host it.
+      // Drawing it would show nothing legible and cost one GfxRenderer LOG_ERR per out-of-panel
+      // pixel. The words are already consumed, so this is a real loss; the message names the cause
+      // so it is not confused with the recoverable case.
+      LOG_ERR("ILN", "Annotation token wider than the full measure; row lost");
       continue;
     }
 
@@ -314,13 +324,15 @@ void ChapterHtmlSlimParser::buildAnnotationRuns(const InterlinearAnnotation& ann
     if (remaining < 0) remaining = 0;
   }
 
-  // The only place a translation can still lose text: it did not fit the sentence's whole on-page
-  // region even with every row stretched to the panel edge. A further row is not available -- it
-  // would put two annotation rows over one source line, the doubling this layout forbids.
-  if (!annotationText.isEmpty()) {
-    LOG_ERR("ILN", "Annotation overflows %u line(s); %u token(s) dropped", static_cast<unsigned>(slots),
-            static_cast<unsigned>(annotationText.size()));
-  }
+  // Anything still in the stream is CARRIED, not dropped: it stays at the front for the next
+  // sentence, which prepends it to its own words and spends its own slots on it first. That is the
+  // whole overflow rule now — the tail moves forward through strips that already exist, one per
+  // source line, so rules 2 and 3 (strict alternation, one strip per source line) are untouched and
+  // the page pitch does not change. What it does cost is rule 4: a carried tail prints above a LATER
+  // source line than its own sentence, so the translation drifts out of sentence sync until the
+  // stream catches up. That trade is deliberate — losing the words outright was the alternative.
+  // Only renderInterlinear can report a real loss, and only at the end of the paragraph, where no
+  // further strip exists.
 }
 
 void ChapterHtmlSlimParser::placeInterlinearRow(const std::shared_ptr<TextBlock>& row, const int16_t xPos,
@@ -344,13 +356,14 @@ void ChapterHtmlSlimParser::emitInterlinearPair(const std::vector<InterlinearRun
                                                 const std::shared_ptr<TextBlock>& srcLine, const int stripHeight,
                                                 const int srcRowHeight, const int16_t leftInset,
                                                 const uint32_t sourceOffset) {
-  // ATOMIC FIT, over a FIXED group: exactly one strip plus one source line, every time. The
-  // !elements.empty() guard is the one emitHorizontalRule already uses -- an EMPTY page must never be
-  // completed or it reaches section.bin as a blank page the reader then displays, and it is also the
-  // anti-loop guard: an empty page never breaks, so a group taller than the whole viewport still
-  // lands instead of spinning. With the group height now constant there is no degenerate per-row
-  // fallback to keep.
-  const int groupHeight = stripHeight + srcRowHeight;
+  // ATOMIC FIT, over a FIXED group: one strip plus one source line, every time -- except for a TAIL
+  // strip, where srcLine is null because the paragraph's source is already fully emitted and only
+  // translation is left (see the tail drain in renderInterlinear). Such a group is the strip alone.
+  // The !elements.empty() guard is the one emitHorizontalRule already uses -- an EMPTY page must never
+  // be completed or it reaches section.bin as a blank page the reader then displays, and it is also
+  // the anti-loop guard: an empty page never breaks, so a group taller than the whole viewport still
+  // lands instead of spinning.
+  const int groupHeight = stripHeight + (srcLine ? srcRowHeight : 0);
   if (!currentPage->elements.empty() && currentPageNextY + groupHeight > viewportHeight) {
     setCurrentPageVisibleOffset(sourceOffset);
     completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
@@ -373,8 +386,10 @@ void ChapterHtmlSlimParser::emitInterlinearPair(const std::vector<InterlinearRun
   }
   currentPageNextY += stripHeight;
 
-  placeInterlinearRow(srcLine, leftInset, static_cast<int16_t>(currentPageNextY), LineFontRole::Body);
-  currentPageNextY += srcRowHeight;
+  if (srcLine) {
+    placeInterlinearRow(srcLine, leftInset, static_cast<int16_t>(currentPageNextY), LineFontRole::Body);
+    currentPageNextY += srcRowHeight;
+  }
 
   // FOOTNOTES, attributed to the page carrying the anchor exactly as addLineToPage (:1828-1834) does
   // it. Interlinear needs its own copy because a PAIRED paragraph never reaches addLineToPage, and
@@ -398,6 +413,8 @@ void ChapterHtmlSlimParser::emitInterlinearPair(const std::vector<InterlinearRun
   // out of reach. See the matching drain in renderSideBySide for why the old "startNewTextBlock zeroed
   // it" reasoning was not sound. The pre-layout anchor index vs post-layout wordCount() mismatch is
   // addLineToPage's own approximation, kept identical here.
+  // A tail strip carries no source words, so it advances no footnote counter and can release none.
+  if (!srcLine) return;
   wordsExtractedInBlock += srcLine->wordCount();
   auto footnoteIt = pendingFootnotes.begin();
   while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
@@ -419,7 +436,10 @@ void ChapterHtmlSlimParser::emitInterlinearPair(const std::vector<InterlinearRun
 // 2. STRICT ALTERNATION. Every source line of an annotated paragraph gets a strip above it, blank or
 //    not, so a source line never directly follows a source line and a strip never follows a strip.
 //    The eye tracks one fixed pitch down the page, which is the whole reason an interlinear layout
-//    is readable.
+//    is readable. The single exception is the TAIL of a paragraph whose translation outruns every
+//    strip in it: there the source is already finished, so consecutive strips alternate with nothing
+//    and the pitch inside the paragraph is unaffected. See the tail drain at the end of
+//    renderInterlinear.
 // 3. EXACTLY ONE STRIP PER SOURCE LINE — not one per sentence. A sentence spanning three source
 //    lines has its translation DISTRIBUTED across the three strips above them: the translation flows
 //    too, in small type, one line of it per line of source. Distributed, not packed — wrapping the
@@ -432,12 +452,18 @@ void ChapterHtmlSlimParser::emitInterlinearPair(const std::vector<InterlinearRun
 //    the head of the next, its strip carries two runs at one y — still one strip, still one y advance
 //    — and the two runs are held to disjoint horizontal BANDS, mirroring the split the source line
 //    itself has at that x, so they can never print on top of each other.
-// 5. OVERFLOW STRETCHES; IT IS NEVER A SECOND ROW AND IS NEVER SILENTLY CUT. A translation longer than
-//    its band takes the room it needs, up to the free width of its strip: it eats the space the next
-//    sentence's annotation would have had, and that sentence's run is pushed right off this one's
-//    rightEdge. A second row is forbidden — it would break rule 2 — so text is lost only when the
-//    translation exceeds the sentence's ENTIRE on-page region with every row already stretched to the
-//    panel edge, and that case is logged rather than passing silently.
+// 5. OVERFLOW STRETCHES, THEN CARRIES; IT IS NEVER A SECOND ROW AND IS NEVER SILENTLY CUT. A
+//    translation longer than its band first takes the room it needs, up to the free width of its
+//    strip: it eats the space the next sentence's annotation would have had, and that sentence's run
+//    is pushed right off this one's rightEdge. What still does not fit is CARRIED — it stays at the
+//    front of the paragraph's annotation stream, and the next sentence spends its own slots on it
+//    before its own words. A second row over one source line stays forbidden, because that is what
+//    would break rule 2; carrying forward does not, since it only uses strips that already exist.
+//    The cost is paid by rule 4 instead: a carried tail prints above a LATER source line than its own
+//    sentence, so sync degrades until the stream catches up. When even the whole paragraph's strips
+//    are not enough, the remainder is drawn as source-less TAIL strips (see rule 2's exception), so
+//    nothing is dropped for want of room at all -- only a TextBlock arena OOM can still lose a row,
+//    and that is logged.
 //
 // WHY THE PAIRING STILL RUNS FIRST: sentence boundaries are what rule 4 is defined in terms of, and
 // they can only be read off the PRE-layout token stream in logical order (buildMergedWordStream).
@@ -636,11 +662,51 @@ void ChapterHtmlSlimParser::renderInterlinear(std::unique_ptr<ParsedText> origBl
     }
   };
 
+  // The annotation text for the WHOLE paragraph, drained strip by strip. One block per paragraph
+  // rather than one per sentence, because a sentence's unplaced tail has to survive into the next
+  // sentence's slots: extractNextLine consumes from the front, so whatever a sentence could not
+  // place is simply still there when the next one appends its own words behind it.
+  //
+  // ALWAYS Left. The row is positioned by an x read off the real laid-out source — the source
+  // block's alignment is already baked into that number, so inheriting it here would apply it twice.
+  //
+  // textAlignDefined is deliberately left FALSE. It is read in exactly one place — extractLine's
+  // "resolved RTL + no explicit text-align + Left" rule, which flips the row to Right — and that is
+  // exactly what an RTL TARGET language needs here: the row is laid out at its BAND's width and then
+  // placed as a whole box at the band's start, so flipping it right puts a Hebrew / Arabic / Persian
+  // translation's first glyph on the band's right edge, i.e. on the reading-order start of the span
+  // its source sentence occupies. An RTL SOURCE paragraph never reaches here at all: the guard above
+  // refuses to annotate one.
+  //
+  // NO first-line indent. Sentence sync is the whole-box placement at the band start, not an indent:
+  // that is direction-agnostic and gives every row a band of its own. textIndentDefined MUST stay
+  // true — with it false and extraParagraphSpacing false, resolveFirstLineIndent falls through to its
+  // three-space default and every row is inset.
+  //
+  // extraParagraphSpacing=false keeps resolveFirstLineIndent on the branch that returns the explicit
+  // value verbatim rather than the paragraph-gap branch. hyphenationEnabled=false keeps a long
+  // compound wrapping early instead of being broken at 8pt, and focusReading is a body-text
+  // affordance that has no business in an annotation.
+  BlockStyle annStyle;
+  annStyle.alignment = CssTextAlign::Left;
+  annStyle.textIndent = 0;
+  annStyle.textIndentDefined = true;
+  ParsedText annotationStream(/*extraParagraphSpacing=*/false, /*hyphenationEnabled=*/false,
+                              /*focusReadingEnabled=*/false, annStyle);
+
   // STEP 2 — per sentence, read its band geometry off the SOURCE, then flow its translation through
-  // the strips above its own source lines, one row per line.
+  // the strips above its own source lines, one row per line. A sentence that cannot fit its text
+  // leaves the tail in annotationStream and the next sentence spends its slots on it first.
   for (int s = 0; s < annotationCount; s++) {
     const ParsedText::TrackedWordPos& here = sentencePos[s];
-    if (here.line == ParsedText::TrackedWordPos::NOT_PLACED || here.line >= srcLines.size()) continue;
+    if (here.line == ParsedText::TrackedWordPos::NOT_PLACED || here.line >= srcLines.size()) {
+      // No band geometry for this sentence: layout never reported a line for its tracked word (its
+      // source line was dropped, or was never reached). Its translation is still queued so a later
+      // sentence -- or the tail strips -- can place it. Skipping the whole sentence here is how this
+      // text used to be lost outright.
+      appendAnnotationSpan(interlinearAnnotations[s], *transBlock, annotationStream);
+      continue;
+    }
     const size_t firstLine = here.line;
 
     // The next PLACED sentence bounds this one. `startsLine` is the whole shared-line question and
@@ -674,7 +740,8 @@ void ChapterHtmlSlimParser::renderInterlinear(std::unique_ptr<ParsedText> origBl
     // The strip this sentence opens on may already carry the previous sentence's closing row.
     bands.floorX = (nextLine == firstLine && !pending.empty()) ? pendingRightEdge : 0;
 
-    buildAnnotationRuns(interlinearAnnotations[s], *transBlock, bands, effectiveWidth, annotationFont, sentenceRuns);
+    buildAnnotationRuns(interlinearAnnotations[s], *transBlock, bands, effectiveWidth, annotationFont, sentenceRuns,
+                        annotationStream);
 
     for (InterlinearRun& run : sentenceRuns) {
       // run.slot, not the run's index: a slot whose strip had no room left is skipped, so the two
@@ -692,6 +759,38 @@ void ChapterHtmlSlimParser::renderInterlinear(std::unique_ptr<ParsedText> origBl
   // Trailing source lines: an unannotated paragraph, the tail past the last sentence, and the line
   // the last pending run is waiting for.
   flushUpTo(srcLines.size());
+
+  // TAIL STRIPS. The source is fully emitted and the stream is not empty: the paragraph's whole
+  // translation was wider than every strip above it put together, so the remainder is drawn as
+  // strips with NO source line under them, one after another, until nothing is left. Text is never
+  // dropped for want of room -- this is the bottom of that guarantee.
+  //
+  // This is the ONE place rule 2's strict alternation is relaxed, and it can only be reached where
+  // there is no source left to alternate with, so the fixed strip/source pitch INSIDE the paragraph
+  // is untouched: what the reader sees is a short block of small type finishing the translation.
+  //
+  // Wrapped at the full measure and placed at the margin, with no syncX: a tail row has no source
+  // sentence left on the page to sync to. The offset is the last source line's, so a reposition
+  // anchor landing on a tail strip resolves to the end of the paragraph rather than to nothing.
+  const uint32_t tailOffset = sourceOffsets.empty() ? 0 : sourceOffsets.back();
+  // Hoisted out of the loop: one run vector reused for every tail row, so a long tail costs no
+  // repeated allocation. sentenceRuns is already spent by here, so it is the one to borrow.
+  sentenceRuns.clear();
+  sentenceRuns.resize(1);
+  while (!annotationStream.isEmpty()) {
+    std::shared_ptr<TextBlock> row;
+    annotationStream.extractNextLine(renderer, annotationFont, effectiveWidth,
+                                     [&row](const std::shared_ptr<TextBlock>& line) { row = line; });
+    if (!row || row->wordCount() == 0) {
+      // extractNextLine made no progress, which only a TextBlock arena OOM can cause. Stop rather
+      // than spin on a stream that can never drain.
+      LOG_ERR("ILN", "Tail strip OOM; %u token(s) lost", static_cast<unsigned>(annotationStream.size()));
+      break;
+    }
+    sentenceRuns[0] = InterlinearRun{};
+    sentenceRuns[0].row = std::move(row);
+    emitInterlinearPair(sentenceRuns, /*srcLine=*/nullptr, stripHeight, /*srcRowHeight=*/0, leftInset, tailOffset);
+  }
 
   // Same end-of-block net makePages keeps: every entry in the installed ledger belongs to the SOURCE
   // paragraph just emitted (the caller parked the in-flight block's ledger before this call), so

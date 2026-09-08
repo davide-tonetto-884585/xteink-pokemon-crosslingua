@@ -123,9 +123,22 @@ smaller.
 
 Places compact translated annotations above the source lines they belong to.
 The annotation colour can be Black, Grey, or Light Grey, and the annotation
-size can be 8 pt (the default), 10 pt, 12 pt, or the same size as the book's
-own text. Changing the size re-lays the chapter out, since taller annotation
-rows leave fewer lines for the source text on each page.
+size can be 8 pt (the default), 10 pt, or 12 pt. Changing the size re-lays the
+chapter out, since taller annotation rows leave fewer lines for the source text
+on each page. All three stay narrower than the body text, which is what keeps a
+sentence's translation above its own source lines most of the time.
+
+A larger annotation size needs more room per sentence, and a translation is
+often longer than the sentence it translates. When one does not fit the strips
+above its own source lines, the tail is carried into the following strips
+rather than cut, so no translated text is lost. The trade is that a carried
+tail sits above a later source line than the sentence it belongs to, so the
+bigger the annotation size, the further the translation can drift from its
+sentence. At 8 pt this almost never happens; at 12 pt it is occasional.
+
+If a paragraph's translation outruns every strip above it, the remainder is
+drawn as small-type lines directly below the paragraph, with no source line
+between them.
 
 ## Mode switching with no translation
 
