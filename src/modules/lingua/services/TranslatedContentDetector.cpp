@@ -20,14 +20,23 @@ constexpr size_t SCAN_CHUNK = 512;
 struct ScanState {
   const char* bookPrimaryLang = nullptr;
   bool found = false;
+  bool hasText = false;
+  bool inBody = false;
+  unsigned ignoredDepth = 0;
+  bool afterBreak = false;
 };
 
 void XMLCALL onStartElement(void* ud, const XML_Char* name, const XML_Char** atts) {
   auto* state = static_cast<ScanState*>(ud);
-  if (state->found || atts == nullptr) return;
-  // Block-level only, and <html>/<body> are not block tags here, so a document-level
-  // `<html lang="en">` can never be mistaken for a translated paragraph.
-  if (!paraboundary::isContainerBlockTag(name)) return;
+  if (strcmp(name, "body") == 0) state->inBody = true;
+  if (state->ignoredDepth || strcmp(name, "script") == 0 || strcmp(name, "style") == 0) {
+    ++state->ignoredDepth;
+  }
+  if (paraboundary::isHardBreak(name)) state->afterBreak = true;
+  const bool block = paraboundary::isContainerBlockTag(name);
+  const bool inlineTranslation = state->afterBreak && strcmp(name, "span") == 0;
+  if (block) state->afterBreak = false;
+  if (state->found || atts == nullptr || (!block && !inlineTranslation)) return;
 
   // Take the LAST of lang / xml:lang, exactly as ChapterHtmlSlimParser::startElement does, so an
   // element carrying both resolves to the same language in the gate and in the layout engine.
@@ -42,11 +51,32 @@ void XMLCALL onStartElement(void* ud, const XML_Char* name, const XML_Char** att
   }
 }
 
+void XMLCALL onEndElement(void* ud, const XML_Char* name) {
+  auto* state = static_cast<ScanState*>(ud);
+  if (state->ignoredDepth) --state->ignoredDepth;
+  if (strcmp(name, "body") == 0) state->inBody = false;
+}
+
+void XMLCALL onText(void* ud, const XML_Char* text, const int length) {
+  auto* state = static_cast<ScanState*>(ud);
+  if (!state->inBody || state->ignoredDepth) return;
+  for (int i = 0; i < length; ++i) {
+    if (!detail::isAsciiSpace(text[i])) {
+      state->afterBreak = false;
+      state->hasText = true;
+      return;
+    }
+  }
+}
+
 }  // namespace
 
-bool htmlHasTranslatedBlock(const std::string& htmlPath, const std::string& bookPrimaryLang) {
+bool htmlHasTranslatedBlock(const std::string& htmlPath, const std::string& bookPrimaryLang, bool* textless) {
+  if (textless) *textless = false;
   // No book language: nothing can be classified as "other than the book's language". Answer
-  // without touching the SD card (see the header note on why this is the safe answer).
+  // without touching the SD card (see the header note on why this is the safe answer). `textless`
+  // keeps its false default here rather than earning a scan of its own: its only consumer is the
+  // per-chapter fallback gate, which downgrades a book with no language whatever this says.
   if (bookPrimaryLang.empty()) return false;
 
   HalFile htmlFile;
@@ -72,7 +102,9 @@ bool htmlHasTranslatedBlock(const std::string& htmlPath, const std::string& book
   ScanState state;
   state.bookPrimaryLang = bookPrimaryLang.c_str();
   XML_SetUserData(parser, &state);
-  XML_SetStartElementHandler(parser, onStartElement);
+  XML_SetElementHandler(parser, onStartElement, onEndElement);
+  XML_SetCharacterDataHandler(parser, onText);
+  bool complete = false;
 
   size_t totalRead = 0;
   // Stops at the first translated block: a bilingual chapter normally answers within the first
@@ -86,8 +118,10 @@ bool htmlHasTranslatedBlock(const std::string& htmlPath, const std::string& book
     // A malformed tail is not a reason to claim a translation: stop and report what was seen so
     // far. Chapter HTML that expat rejects would fail the layout parse too.
     if (XML_Parse(parser, buf.get(), bytesRead, done ? 1 : 0) == XML_STATUS_ERROR) break;
+    complete = done;
   }
 
+  if (textless) *textless = complete && !state.hasText && !state.found;
   XML_ParserFree(parser);
   LOG_DBG("TRDET", "%s: embedded translation = %s (scanned %u/%u bytes)", htmlPath.c_str(), state.found ? "yes" : "no",
           static_cast<unsigned>(totalRead), static_cast<unsigned>(fileSize));
