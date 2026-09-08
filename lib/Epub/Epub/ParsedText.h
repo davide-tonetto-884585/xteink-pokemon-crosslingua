@@ -144,8 +144,8 @@ class ParsedText {
   // no stylesheet of their own, in a font that may differ from the body's.
   static int defaultFirstLineIndent(const GfxRenderer& renderer, int fontId, bool extraParagraphSpacing);
 
-  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false,
-               bool attachToPrevious = false, uint32_t visibleTextOffset = 0, uint8_t linkId = 0);
+  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
+               uint32_t visibleTextOffset = 0, uint8_t linkId = 0);
   // Grow all five parallel token vectors (and rubyTexts, when it is in use) to hold `additionalTokens`
   // more entries in ONE step, instead of letting each double independently from zero. addWord uses it
   // on its multi-token paths; call it directly before any external push loop whose length is known
@@ -229,11 +229,10 @@ class ParsedText {
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                              bool includeLastLine = true, std::vector<TrackedWordPos>* trackedOutParam = nullptr) {
-    layoutAndExtractLines(renderer, fontId, viewportWidth,
-                          [&processLine](std::shared_ptr<TextBlock> line, uint32_t) {
-                            processLine(std::move(line));
-                          },
-                          includeLastLine, trackedOutParam);
+    layoutAndExtractLines(
+        renderer, fontId, viewportWidth,
+        [&processLine](std::shared_ptr<TextBlock> line, uint32_t) { processLine(std::move(line)); }, includeLastLine,
+        trackedOutParam);
   }
   // Lay out exactly ONE line at `width` and consume only that line's words, leaving the rest of the
   // block for a later call — at a DIFFERENT width if the caller wants one.

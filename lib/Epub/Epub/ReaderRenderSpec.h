@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
 
-#include "modules/lingua/modes/interlinear/InterlinearAnnotation.h"
 #include "modules/lingua/layout/LinguaLayout.h"
+#include "modules/lingua/modes/interlinear/InterlinearAnnotation.h"
 
 // The resolved text-rendering configuration a reader hands to the layout
 // engine. Section-cache validation keys on every VALUE field: a section file built

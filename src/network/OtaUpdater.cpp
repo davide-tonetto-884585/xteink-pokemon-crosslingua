@@ -36,8 +36,7 @@ ProductVersion parseProductVersion(const char* version) {
   if (!version) return parsed;
 
   if (*version == 'v' || *version == 'V') version++;
-  if (sscanf(version, "%d.%d.%d", &parsed.crossLinguaMajor, &parsed.crossLinguaMinor,
-             &parsed.crossLinguaPatch) != 3) {
+  if (sscanf(version, "%d.%d.%d", &parsed.crossLinguaMajor, &parsed.crossLinguaMinor, &parsed.crossLinguaPatch) != 3) {
     return parsed;
   }
 
@@ -130,9 +129,8 @@ bool OtaUpdater::isUpdateNewer() const {
                      current.crossLinguaMajor, current.crossLinguaMinor, current.crossLinguaPatch);
   if (crossLinguaOrder != 0) return crossLinguaOrder > 0;
 
-  const int crossPointOrder =
-      compareTriplet(latest.crossPointMajor, latest.crossPointMinor, latest.crossPointPatch, current.crossPointMajor,
-                     current.crossPointMinor, current.crossPointPatch);
+  const int crossPointOrder = compareTriplet(latest.crossPointMajor, latest.crossPointMinor, latest.crossPointPatch,
+                                             current.crossPointMajor, current.crossPointMinor, current.crossPointPatch);
   if (crossPointOrder != 0) return crossPointOrder > 0;
 
   // If we reach here, it means all segments are equal.

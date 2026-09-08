@@ -108,8 +108,8 @@ void LinguaModeChooser::buildScreen(UiAppHost::UiScreen& screen) {
     rowHeight = static_cast<int16_t>(metrics.listRowHeight);
     props.rowHeight = rowHeight;
   }
-  nav.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap,
-                  static_cast<int>(LINGUA_SELECTABLE_MODE_COUNT), props);
+  nav.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, static_cast<int>(LINGUA_SELECTABLE_MODE_COUNT),
+                  props);
   screen.list(props);
 }
 

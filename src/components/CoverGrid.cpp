@@ -123,15 +123,15 @@ void drawCell(GfxRenderer& renderer, const CoverGridStyle& style, Rect rect, int
 CoverGridStyle activeCoverGridStyle() {
   // Lyra (and the 3-covers variant that derives from it) paints a rounded light-gray selection and
   // keeps its cell content black; every other theme uses the square black fill with inverted content.
-  const bool lyra = SETTINGS.uiTheme == CrossPointSettings::LYRA || SETTINGS.uiTheme == CrossPointSettings::LYRA_3_COVERS;
+  const bool lyra =
+      SETTINGS.uiTheme == CrossPointSettings::LYRA || SETTINGS.uiTheme == CrossPointSettings::LYRA_3_COVERS;
   if (!lyra) return CoverGridStyle{};
   return CoverGridStyle{LYRA_SELECTION_RADIUS, /*invertSelectedContent=*/false};
 }
 
 void drawCoverGrid(GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex, int pageOffset,
-                   const std::function<std::string(int)>& getTitle,
-                   const std::function<std::string(int)>& getThumbPath, const std::function<bool(int)>& isDirectory,
-                   const std::function<bool(int)>& isPending) {
+                   const std::function<std::string(int)>& getTitle, const std::function<std::string(int)>& getThumbPath,
+                   const std::function<bool(int)>& isDirectory, const std::function<bool(int)>& isPending) {
   const CoverGridStyle style = activeCoverGridStyle();
   const int pageEnd = std::min(pageOffset + GRID_COLS * GRID_ROWS, itemCount);
   for (int i = pageOffset; i < pageEnd; i++) {

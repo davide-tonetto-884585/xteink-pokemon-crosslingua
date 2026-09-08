@@ -16,8 +16,7 @@ class EpdFontFamily {
     STRIKETHROUGH = 8,  // drawn as a line through midline by TextBlock::render()
     SUP = 16,           // superscript: glyph scaled 50%, raised ~40% of ascender
     SUB = 32,           // subscript: glyph scaled 50%, lowered ~25% of ascender
-    TRANSLATED =
-        64,  // bit 6: word came from a translated block (lang= attribute set); used by Lingua Dark/Light modes
+    TRANSLATED = 64,  // bit 6: word came from a translated block (lang= attribute set); used by Lingua Dark/Light modes
     RUBY_CONTINUE = 128,  // bit 7: group ruby follower marker for native <ruby>/<rt> support; set at layout
                           // (ParsedText), persisted in the section.bin word style byte, read by TextBlock and
                           // ChapterHtmlSlimParser to keep ruby groups together. Upstream introduced this as 64,

@@ -440,8 +440,8 @@ bool runPost(const std::string& url, const std::string& body, const char* conten
 // `userAgent` is nullptr for every caller but the ones that must present a specific
 // User-Agent (see HttpDownloader::fetchUrl); nullptr keeps the default CrossPoint UA.
 HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
-                                           const std::string& password, Sink& sink,
-                                           const char* userAgent = nullptr, bool downgradeRedirectsToHttp = false) {
+                                           const std::string& password, Sink& sink, const char* userAgent = nullptr,
+                                           bool downgradeRedirectsToHttp = false) {
 #if defined(FREEINK_NET_WOLFSSL)
   return runGetWolf(url, username, password, sink, userAgent, downgradeRedirectsToHttp);
 #else

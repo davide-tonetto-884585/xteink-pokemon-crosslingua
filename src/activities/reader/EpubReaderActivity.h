@@ -12,11 +12,11 @@
 
 #include "BookmarkEntry.h"
 #include "EpubReaderMenuActivity.h"
-#include "modules/lingua/reader/LinguaReaderIntegration.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
+#include "modules/lingua/reader/LinguaReaderIntegration.h"
 
 enum class LinguaResult : uint8_t;
 

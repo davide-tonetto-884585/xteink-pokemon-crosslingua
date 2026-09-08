@@ -1,7 +1,7 @@
 #pragma once
 
-#include <string>
 #include <functional>
+#include <string>
 
 class GfxRenderer;
 struct Rect;
@@ -30,9 +30,8 @@ CoverGridStyle activeCoverGridStyle();
 // a loading placeholder instead of the blank of a processed, cover-less book.
 // Issues no display refresh.
 void drawCoverGrid(GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex, int pageOffset,
-                   const std::function<std::string(int)>& getTitle,
-                   const std::function<std::string(int)>& getThumbPath, const std::function<bool(int)>& isDirectory,
-                   const std::function<bool(int)>& isPending);
+                   const std::function<std::string(int)>& getTitle, const std::function<std::string(int)>& getThumbPath,
+                   const std::function<bool(int)>& isDirectory, const std::function<bool(int)>& isPending);
 
 // Repaints only the single selected cell over an already-painted grid. Issues no display refresh.
 void drawCoverGridSelection(GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex, int pageOffset,
