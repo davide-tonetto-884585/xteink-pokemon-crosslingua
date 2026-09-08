@@ -86,7 +86,8 @@ class BookShelfActivity final : public Activity {
   void freeGridBuffer();
 
   // Grid geometry lives in components/CoverGridLayout.h — the single source of truth shared
-  // with the themes' drawCoverGrid, so thumbs are generated at exactly the display size.
+  // with components/CoverGrid.h's drawCoverGrid, so thumbs are generated at exactly the display
+  // size.
   static constexpr int GRID_PAGE_ITEMS = covergrid::GRID_PAGE_ITEMS;
   static constexpr unsigned long GO_HOME_MS = 1000;
   static constexpr unsigned long TOGGLE_DISPLAY_MS = 1000;

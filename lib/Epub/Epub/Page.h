@@ -2,12 +2,14 @@
 #include <HalStorage.h>
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "FootnoteEntry.h"
 #include "PageFontSet.h"
+#include "PageLink.h"
 #include "blocks/ImageBlock.h"
 #include "blocks/TextBlock.h"
 
@@ -92,6 +94,8 @@ class Page {
   // the Page Translation overlay to know what to surface for the current page). -1 = none/unset.
   int16_t firstParagraphIdx = -1;
   int16_t lastParagraphIdx = -1;
+  std::vector<PageLink> links;
+  static constexpr uint16_t MAX_LINKS_PER_PAGE = 32;
 
   // Zero-based visible-codepoint offset where this page starts. Not part of the serialized page
   // body (it lives in the section's visible-offset LUT); Section::loadPage* fills it in from the
@@ -112,6 +116,24 @@ class Page {
   void render(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset) const;
   void renderImages(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset) const;
   void renderWithImagePlaceholders(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset) const;
+  bool addLink(const char* href, int16_t x, int16_t y, int16_t width, int16_t height) {
+    if (!href || width <= 0 || height <= 0 || links.size() >= MAX_LINKS_PER_PAGE) {
+      return false;
+    }
+    const size_t hrefLen = strnlen(href, sizeof(PageLink::href));
+    if (hrefLen == 0 || hrefLen == sizeof(PageLink::href)) {
+      return false;
+    }
+    links.emplace_back();
+    auto& link = links.back();
+    memcpy(link.href, href, hrefLen + 1);
+    link.x = x;
+    link.y = y;
+    link.width = width;
+    link.height = height;
+    return true;
+  }
+
   bool serialize(HalFile& file) const;
   static std::unique_ptr<Page> deserialize(HalFile& file);
 

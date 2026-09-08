@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 #include <expat.h>
 
+#include <array>
 #include <climits>
 #include <functional>
 #include <memory>
@@ -134,6 +135,9 @@ class ChapterHtmlSlimParser {
     CssTextDecoration textDecoration = CssTextDecoration::None;
     bool hasDirection = false;
     CssTextDirection direction = CssTextDirection::Ltr;
+    bool setsParagraphDirection = false;
+    bool hasTextAlign = false;
+    CssTextAlign textAlign = CssTextAlign::Left;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
     // Lingua: true when the enclosing block/inline element has a lang= attribute
@@ -148,11 +152,22 @@ class ChapterHtmlSlimParser {
   CssTextDecoration effectiveTextDecoration = CssTextDecoration::None;
   bool effectiveDirectionDefined = false;
   CssTextDirection effectiveDirection = CssTextDirection::Ltr;
+  bool effectiveTextAlignDefined = false;
+  CssTextAlign effectiveTextAlign = CssTextAlign::Left;
   bool effectiveSup = false;
   bool effectiveSub = false;
+  static constexpr size_t MAX_GRID_TABLE_COLUMNS = 4;
+  static constexpr size_t MAX_GRID_TABLE_CELL_WORDS = 32;
+  static constexpr size_t MAX_GRID_TABLE_CELL_BYTES = 512;
   int tableDepth = 0;
-  int tableRowIndex = 0;
-  int tableColIndex = 0;
+  bool insideTableCell = false;
+  bool tableRowStacked = false;
+  bool tableRowRtl = false;
+  uint16_t tableRowsSpannedRemaining = 0;
+  size_t tableCellTextBytes = 0;
+  std::vector<std::unique_ptr<ParsedText>> tableRowCells;
+  std::array<std::vector<std::shared_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
+  std::vector<uint32_t> tableLineVisibleOffsets;
   bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
@@ -170,12 +185,14 @@ class ChapterHtmlSlimParser {
   uint32_t currentPageVisibleOffset = 0;
   bool currentPageVisibleOffsetSet = false;
   bool insideBody = false;
+  bool htmlEnded_ = false;
   bool syntheticCharacterData = false;
   uint16_t nonVisibleTextDepth = 0;
 
   // Footnote link tracking
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;
+  uint8_t currentFootnoteLinkId = 0;
   FootnoteEntry currentFootnote = {};
   int currentFootnoteLinkTextLen = 0;
   // The FOOTNOTE LEDGER of the block currently open / being laid out: the anchors it has pushed but
@@ -238,6 +255,10 @@ class ChapterHtmlSlimParser {
   // restore the parked in-flight ledger. Leaves bufferedOriginalFootnotes empty (and its capacity
   // recycled), which is the precondition the next buffered block relies on.
   void releaseFootnoteLedger(FootnoteLedger& parked);
+  void fallbackTableRowToStacked();
+  void closeTableCell();
+  void finishTableRow();
+  void addTableRowSeparator();
   void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();
   // Lingua (LinguaLayout::SideBySide): two-column table layout. makePagesTableMode routes an
@@ -315,6 +336,8 @@ class ChapterHtmlSlimParser {
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
+  static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);
+  void pushTableTextStyleEntry(const CssStyle& cssStyle);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
   // XML callbacks

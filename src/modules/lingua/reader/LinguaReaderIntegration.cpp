@@ -6,6 +6,7 @@
 #include "activities/Activity.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
+#include "components/WrappedPopup.h"
 #include "fontIds.h"
 
 LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleInput(MappedInputManager& input,
@@ -194,7 +195,7 @@ bool LinguaReaderIntegration::prepareOverlayFonts(GfxRenderer& renderer, const P
 
 void LinguaReaderIntegration::drawTransientUi(GfxRenderer& renderer) const {
   if (showNoTranslationsToast_) {
-    GUI.drawWrappedPopup(renderer, tr(STR_NO_TRANSLATIONS_FOR_PAGE));
+    drawWrappedPopup(renderer, tr(STR_NO_TRANSLATIONS_FOR_PAGE));
   }
 }
 

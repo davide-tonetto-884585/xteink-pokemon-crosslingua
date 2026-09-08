@@ -14,7 +14,6 @@
 
 #include "I18n.h"
 #include "RecentBooksStore.h"
-#include "components/CoverGridLayout.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -113,8 +112,7 @@ void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bo
   fillBatteryIcon(renderer, iconRect, percentage);
 }
 
-void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const size_t current,
-                                const size_t total) const {
+void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const size_t current, const size_t total) {
   if (total == 0) {
     return;
   }
@@ -142,7 +140,7 @@ void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const si
 // and run into the neighbouring hint, and now wraps to at most two centred lines
 // (wrappedText() ellipsises anything that still doesn't fit). Shared so every
 // theme's drawButtonHints() gets the same behaviour.
-void BaseTheme::drawHintLabel(GfxRenderer& renderer, const int fontId, const char* label, const int x,
+void BaseTheme::drawHintLabel(const GfxRenderer& renderer, const int fontId, const char* label, const int x,
                               const int boxWidth, const int boxTop, const int boxHeight, const int singleLineYOffset) {
   constexpr int textPadding = 4;  // keeps a wrapped label off the button's border
   const int maxTextWidth = boxWidth - (textPadding * 2);
@@ -272,116 +270,6 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
   }
 }
 
-int BaseTheme::getListRowStep(bool hasSubtitle) const {
-  int rowHeight = (hasSubtitle) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
-  return rowHeight;
-}
-
-int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
-  const int rowStep = getListRowStep(hasSubtitle);
-  if (rowStep <= 0) return 1;
-  return std::max(1, contentHeight / rowStep);
-}
-
-void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
-                         const std::function<std::string(int index)>& rowTitle,
-                         const std::function<std::string(int index)>& rowSubtitle,
-                         const std::function<UIIcon(int index)>& rowIcon,
-                         const std::function<std::string(int index)>& rowValue, bool highlightValue,
-                         const std::function<bool(int index)>& rowDimmed,
-                         const std::function<bool(int index)>& rowIndented) const {
-  int rowHeight =
-      (rowSubtitle != nullptr) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
-  int pageItems = rowHeight > 0 ? std::max(1, rect.height / rowHeight) : 1;
-
-  const int totalPages = (itemCount + pageItems - 1) / pageItems;
-  if (totalPages > 1) {
-    constexpr int indicatorWidth = 20;
-    constexpr int arrowSize = 6;
-    constexpr int margin = 15;  // Offset from right edge
-
-    const int centerX = rect.x + rect.width - indicatorWidth / 2 - margin;
-    const int indicatorTop = rect.y;  // Offset to avoid overlapping side button hints
-    const int indicatorBottom = rect.y + rect.height - arrowSize;
-
-    // Draw up arrow at top (^) - narrow point at top, wide base at bottom
-    for (int i = 0; i < arrowSize; ++i) {
-      const int lineWidth = 1 + i * 2;
-      const int startX = centerX - i;
-      renderer.drawLine(startX, indicatorTop + i, startX + lineWidth - 1, indicatorTop + i);
-    }
-
-    // Draw down arrow at bottom (v) - wide base at top, narrow point at bottom
-    for (int i = 0; i < arrowSize; ++i) {
-      const int lineWidth = 1 + (arrowSize - 1 - i) * 2;
-      const int startX = centerX - (arrowSize - 1 - i);
-      renderer.drawLine(startX, indicatorBottom - arrowSize + 1 + i, startX + lineWidth - 1,
-                        indicatorBottom - arrowSize + 1 + i);
-    }
-  }
-
-  // Draw selection
-  int contentWidth = rect.width - 5;
-  if (selectedIndex >= 0) {
-    renderer.fillRect(rect.x, rect.y + selectedIndex % pageItems * rowHeight - 2, rect.width, rowHeight);
-  }
-  constexpr int minValueGap = 10;
-
-  // Draw all items
-  const auto pageStartIndex = selectedIndex / pageItems * pageItems;
-  for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
-    const int itemY = rect.y + (i % pageItems) * rowHeight;
-
-    // Child rows shift right and give up that much title width; see kListChildIndent.
-    const int indent = (rowIndented && rowIndented(i)) ? kListChildIndent : 0;
-    const int textX = rect.x + BaseMetrics::values.contentSidePadding + indent;
-
-    int rowTextWidth = contentWidth - BaseMetrics::values.contentSidePadding * 2 - indent;
-    std::string valueText;
-    if (rowValue != nullptr) {
-      valueText = rowValue(i);
-      if (!valueText.empty()) {
-        int maxValW = std::max(0, rowTextWidth - 40 - minValueGap);
-        valueText = renderer.truncatedText(UI_10_FONT_ID, valueText.c_str(), maxValW);
-        int valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + minValueGap;
-        rowTextWidth -= valueWidth;
-      }
-    }
-
-    auto itemName = rowTitle(i);
-    auto font = UI_10_FONT_ID;
-    auto item = renderer.truncatedText(font, itemName.c_str(), rowTextWidth);
-    renderer.drawText(font, textX, itemY, item.c_str(), i != selectedIndex);
-
-    // Apply checkerboard dither to create gray text effect for dimmed items
-    if (rowDimmed && rowDimmed(i) && i != selectedIndex) {
-      const int titleWidth = renderer.getTextWidth(font, item.c_str());
-      const int lineH = renderer.getLineHeight(font);
-      for (int py = itemY; py < itemY + lineH; py++)
-        for (int px = textX; px < textX + titleWidth; px++)
-          if ((px + py) % 2 == 0) renderer.drawPixel(px, py, false);
-    }
-
-    if (rowSubtitle != nullptr) {
-      std::string subtitleText = rowSubtitle(i);
-      if (!subtitleText.empty()) {
-        auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
-        renderer.drawText(SMALL_FONT_ID, textX, itemY + 22, subtitle.c_str(), i != selectedIndex);
-      }
-    }
-
-    if (!valueText.empty()) {
-      const auto valueTextWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str());
-      int valueY = itemY;
-      if (rowSubtitle != nullptr) {
-        valueY = itemY + 10;
-      }
-      renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - BaseMetrics::values.contentSidePadding - valueTextWidth,
-                        valueY, valueText.c_str(), i != selectedIndex);
-    }
-  }
-}
-
 void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const {
   // Every activity header renders through the FreeInkUI header + battery
   // indicator components, styled by the active theme's tokens (padding,
@@ -495,75 +383,23 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
 }
 
 void BaseTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label, const char* rightLabel) const {
-  constexpr int maxListValueWidth = 200;
+  constexpr int labelGap = 10;
+  const int contentWidth = std::max(0, rect.width - BaseMetrics::values.contentSidePadding * 2);
 
-  int currentX = rect.x + BaseMetrics::values.contentSidePadding;
-  int rightSpace = BaseMetrics::values.contentSidePadding;
+  int labelWidth = contentWidth;
   if (rightLabel) {
-    auto truncatedRightLabel =
-        renderer.truncatedText(SMALL_FONT_ID, rightLabel, maxListValueWidth, EpdFontFamily::REGULAR);
-    int rightLabelWidth = renderer.getTextWidth(SMALL_FONT_ID, truncatedRightLabel.c_str());
+    auto truncatedRightLabel = renderer.truncatedText(SMALL_FONT_ID, rightLabel, contentWidth, EpdFontFamily::REGULAR);
+    const int rightLabelWidth = renderer.getTextWidth(SMALL_FONT_ID, truncatedRightLabel.c_str());
     renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - BaseMetrics::values.contentSidePadding - rightLabelWidth,
                       rect.y + 7, truncatedRightLabel.c_str());
-    rightSpace += rightLabelWidth + 10;
+    labelWidth = std::max(0, contentWidth - rightLabelWidth - labelGap);
   }
 
-  auto truncatedLabel = renderer.truncatedText(
-      UI_12_FONT_ID, label, rect.width - BaseMetrics::values.contentSidePadding - rightSpace, EpdFontFamily::REGULAR);
-  renderer.drawText(UI_12_FONT_ID, currentX, rect.y, truncatedLabel.c_str(), true, EpdFontFamily::REGULAR);
-}
-
-void BaseTheme::drawTabBar(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
-                           bool selected) const {
-  constexpr int underlineHeight = 2;  // Height of selection underline
-  constexpr int underlineGap = 4;     // Gap between text and underline
-
-  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-
-  int currentX = rect.x + BaseMetrics::values.contentSidePadding;
-
-  for (const auto& tab : tabs) {
-    const int textWidth =
-        renderer.getTextWidth(UI_12_FONT_ID, tab.label, tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-
-    // Draw underline for selected tab
-    if (tab.selected) {
-      if (selected) {
-        renderer.fillRect(currentX - 3, rect.y, textWidth + 6, lineHeight + underlineGap);
-      } else {
-        renderer.fillRect(currentX, rect.y + lineHeight + underlineGap, textWidth, underlineHeight);
-      }
-    }
-
-    // Draw tab label
-    renderer.drawText(UI_12_FONT_ID, currentX, rect.y, tab.label, !(tab.selected && selected),
-                      tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-
-    currentX += textWidth + BaseMetrics::values.tabSpacing;
+  if (labelWidth > 0) {
+    auto truncatedLabel = renderer.truncatedText(UI_12_FONT_ID, label, labelWidth, EpdFontFamily::REGULAR);
+    renderer.drawText(UI_12_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding, rect.y, truncatedLabel.c_str(),
+                      true, EpdFontFamily::REGULAR);
   }
-}
-
-bool BaseTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
-                                  const int x, const int y, int& index) const {
-  if (tabs.empty() || y < rect.y || y >= rect.y + rect.height) {
-    return false;
-  }
-
-  int currentX = rect.x + BaseMetrics::values.contentSidePadding;
-  for (size_t i = 0; i < tabs.size(); i++) {
-    const auto& tab = tabs[i];
-    const int textWidth =
-        renderer.getTextWidth(UI_12_FONT_ID, tab.label, tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-    const int left = (i == 0) ? rect.x : currentX - BaseMetrics::values.tabSpacing / 2;
-    const int right = currentX + textWidth + BaseMetrics::values.tabSpacing / 2;
-    if (x >= left && x < right) {
-      index = static_cast<int>(i);
-      return true;
-    }
-    currentX += textWidth + BaseMetrics::values.tabSpacing;
-  }
-
-  return false;
 }
 
 // Draw the "Recent Book" cover card on the home screen
@@ -789,6 +625,7 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     }
   } else {
     // No book to continue reading
+    // Centered on UI_10 metrics both times: the EdsLab UI face's UI_12 line height overshoots here.
     const int y =
         bookY + (bookHeight - renderer.getLineHeight(UI_10_FONT_ID) - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
     renderer.drawCenteredText(UI_12_FONT_ID, y, tr(STR_NO_OPEN_BOOK));
@@ -858,67 +695,6 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   return Rect{x, y, w, h};
 }
 
-void BaseTheme::drawWrappedPopup(const GfxRenderer& renderer, const char* message) const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int marginX = metrics.popupMarginX;
-  const int marginY = metrics.popupMarginY;
-  const int frameThickness = metrics.popupFrameThickness;
-  const EpdFontFamily::Style fontStyle = metrics.popupTextBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-
-  // Constrain the popup to the oriented viewable area (inside the bezel) so it fits in every
-  // orientation, unlike drawPopup which sizes to the full string width against the whole screen.
-  int viewTop, viewRight, viewBottom, viewLeft;
-  renderer.getOrientedViewableTRBL(&viewTop, &viewRight, &viewBottom, &viewLeft);
-  const int screenW = renderer.getScreenWidth();
-  const int screenH = renderer.getScreenHeight();
-  const int viewableW = screenW - viewLeft - viewRight;
-  const int viewableH = screenH - viewTop - viewBottom;
-
-  // Leave room for the box margins and frame on both sides; wrap the text into that width.
-  const int maxTextW = std::max(1, viewableW - 2 * (marginX + frameThickness));
-  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  // Cap lines to what the viewable height can hold; a toast never needs more than a few.
-  constexpr int POPUP_MAX_LINES = 4;
-  const int maxLinesByHeight = std::max(1, (viewableH - 2 * (marginY + frameThickness)) / std::max(1, lineHeight));
-  const int maxLines = std::min(POPUP_MAX_LINES, maxLinesByHeight);
-
-  // wrappedText breaks on spaces and UTF-8-safely hard-clips overflowing words / excess lines.
-  const auto lines = renderer.wrappedText(UI_12_FONT_ID, message, maxTextW, maxLines, fontStyle);
-  if (lines.empty()) return;
-
-  // Box width tracks the widest wrapped line (clamped to the wrap width so it never exceeds
-  // the viewable area); height grows with the wrapped line count.
-  int textW = 0;
-  for (const auto& line : lines) {
-    textW = std::max(textW, renderer.getTextWidth(UI_12_FONT_ID, line.c_str(), fontStyle));
-  }
-  textW = std::min(textW, maxTextW);
-
-  const int w = textW + marginX * 2;
-  const int h = static_cast<int>(lines.size()) * lineHeight + marginY * 2;
-  const int x = (screenW - w) / 2;
-  const int y = static_cast<int>(screenH * metrics.popupTopOffsetRatio);
-
-  const bool useRoundedPopup = metrics.popupCornerRadius > 0;
-  if (useRoundedPopup) {
-    renderer.fillRoundedRect(x - frameThickness, y - frameThickness, w + frameThickness * 2, h + frameThickness * 2,
-                             metrics.popupCornerRadius + frameThickness, Color::White);
-    renderer.fillRoundedRect(x, y, w, h, metrics.popupCornerRadius, Color::Black);
-  } else {
-    renderer.fillRect(x - frameThickness, y - frameThickness, w + frameThickness * 2, h + frameThickness * 2, true);
-    renderer.fillRect(x, y, w, h, false);
-  }
-
-  int textY = y + marginY + metrics.popupTextBaselineOffsetY;
-  for (const auto& line : lines) {
-    const int lineW = renderer.getTextWidth(UI_12_FONT_ID, line.c_str(), fontStyle);
-    const int textX = x + (w - lineW) / 2;
-    renderer.drawText(UI_12_FONT_ID, textX, textY, line.c_str(), metrics.popupTextInverted, fontStyle);
-    textY += lineHeight;
-  }
-  renderer.displayBuffer();
-}
-
 void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int barHeight = metrics.popupProgressBarHeight;
@@ -946,7 +722,7 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
 
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const int textYOffset,
-                              const bool fillMargin, const bool isPageBookmarked, const bool pageCountEstimated) const {
+                              const bool fillMargin, const bool isPageBookmarked, const bool pageCountEstimated) {
   auto metrics = UITheme::getInstance().getMetrics();
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
@@ -967,22 +743,29 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     // Right aligned text for progress counter
     char progressStr[32];
 
-    // Prefix the page count with "~" while a still-building spine only yields an estimated total.
-    const char* estimatePrefix = pageCountEstimated ? "~" : "";
+    // Draw the estimate marker separately so it can use the next UI font size.
+    const bool showEstimate = pageCountEstimated && sb.showChapterPageCount;
 
     if (sb.showBookProgressPercent && sb.showChapterPageCount) {
-      snprintf(progressStr, sizeof(progressStr), "%s%d/%d  %.0f%%", estimatePrefix, currentPage, pageCount,
-               bookProgress);
+      snprintf(progressStr, sizeof(progressStr), "%d/%d  %.0f%%", currentPage, pageCount, bookProgress);
     } else if (sb.showBookProgressPercent) {
       snprintf(progressStr, sizeof(progressStr), "%.0f%%", bookProgress);
     } else {
-      snprintf(progressStr, sizeof(progressStr), "%s%d/%d", estimatePrefix, currentPage, pageCount);
+      snprintf(progressStr, sizeof(progressStr), "%d/%d", currentPage, pageCount);
     }
 
     int progressTextWidth = renderer.getTextWidth(SMALL_FONT_ID, progressStr);
-    renderer.drawText(SMALL_FONT_ID, rightClusterX - progressTextWidth, textY, progressStr);
+    const int estimateWidth = showEstimate ? renderer.getTextWidth(UI_10_FONT_ID, "~") : 0;
+    constexpr int estimateGap = 2;
+    const int estimateSpacing = showEstimate ? estimateGap : 0;
+    const int progressX = rightClusterX - estimateWidth - estimateSpacing - progressTextWidth;
+    if (showEstimate) {
+      const int estimateY = textY + (renderer.getLineHeight(SMALL_FONT_ID) - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+      renderer.drawText(UI_10_FONT_ID, progressX, estimateY, "~");
+    }
+    renderer.drawText(SMALL_FONT_ID, progressX + estimateWidth + estimateSpacing, textY, progressStr);
 
-    rightClusterWidth += progressTextWidth;
+    rightClusterWidth += estimateWidth + estimateSpacing + progressTextWidth;
   }
 
   // Draw Progress Bar
@@ -1085,7 +868,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   }
 }
 
-void BaseTheme::drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const {
+void BaseTheme::drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   auto truncatedLabel =
       renderer.truncatedText(SMALL_FONT_ID, label, rect.width - metrics.contentSidePadding * 2, EpdFontFamily::REGULAR);
@@ -1106,245 +889,4 @@ void BaseTheme::drawTextField(const GfxRenderer& renderer, Rect rect, const int 
     const int lineStart = rect.x + (rect.width - lineW) / 2;
     renderer.drawLine(lineStart, lineY, lineStart + lineW + metrics.textFieldLineEndOffset, lineY, thickness, true);
   }
-}
-
-void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
-                                int selectedIndex) const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-
-  const int optionFontId = metrics.optionPopupUseSmallFont ? UI_10_FONT_ID : UI_10_FONT_ID;
-  const EpdFontFamily::Style optionStyle =
-      metrics.optionPopupOptionFontBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-
-  const int itemSpacing = metrics.optionPopupItemSpacing;
-  const int innerPadding = metrics.optionPopupInnerPadding;
-  const int selectionHPadding = metrics.optionPopupSelectionHPadding;
-  const int selectionVPadding = metrics.optionPopupSelectionVPadding;
-
-  const int optionLineHeight = renderer.getLineHeight(optionFontId);
-  const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int rowHeight = optionLineHeight + selectionVPadding * 2;
-
-  int maxTextWidth = renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD);
-  for (const auto& opt : options) {
-    int w = renderer.getTextWidth(optionFontId, opt.c_str(), optionStyle);
-    if (w > maxTextWidth) maxTextWidth = w;
-  }
-
-  const int optionCount = static_cast<int>(options.size());
-  const int listHeight = rowHeight * optionCount + itemSpacing * (optionCount - 1);
-  const int dialogW = std::min((maxTextWidth + innerPadding * 2 + selectionHPadding * 2) * 12 / 10,
-                               pageWidth - metrics.optionPopupDialogSideMargin * 2);
-  const int contentHeight = titleLineHeight + metrics.optionPopupTitleGap + listHeight;
-  const int dialogH = contentHeight + innerPadding * 2;
-  const int dialogX = (pageWidth - dialogW) / 2;
-  const int dialogY = (pageHeight - dialogH) / 2;
-
-  const int frameThickness = metrics.popupFrameThickness;
-  const int frameRadius = metrics.popupCornerRadius;
-
-  if (frameRadius > 0) {
-    renderer.fillRoundedRect(dialogX - frameThickness, dialogY - frameThickness, dialogW + frameThickness * 2,
-                             dialogH + frameThickness * 2, frameRadius + frameThickness, Color::White);
-    renderer.fillRoundedRect(dialogX, dialogY, dialogW, dialogH, frameRadius, Color::Black);
-    renderer.fillRoundedRect(dialogX + frameThickness, dialogY + frameThickness, dialogW - frameThickness * 2,
-                             dialogH - frameThickness * 2,
-                             frameRadius - frameThickness > 0 ? frameRadius - frameThickness : 0, Color::White);
-  } else {
-    renderer.fillRect(dialogX - frameThickness, dialogY - frameThickness, dialogW + frameThickness * 2,
-                      dialogH + frameThickness * 2, true);
-    renderer.fillRect(dialogX, dialogY, dialogW, dialogH, false);
-  }
-
-  int y = dialogY + innerPadding;
-
-  renderer.drawCenteredText(UI_12_FONT_ID, y, title, true, EpdFontFamily::BOLD);
-  y += titleLineHeight;
-
-  if (metrics.optionPopupTitleSeparator) {
-    const int sepY = y + metrics.optionPopupTitleGap / 2;
-    renderer.drawLine(dialogX + innerPadding, sepY, dialogX + dialogW - innerPadding, sepY, true);
-  }
-
-  y += metrics.optionPopupTitleGap;
-
-  const int itemRectX = dialogX + innerPadding;
-  const int itemRectW = dialogW - innerPadding * 2;
-  const int selectionRadius = metrics.optionPopupSelectionRadius;
-
-  for (int i = 0; i < optionCount; i++) {
-    const int itemY = y + i * (rowHeight + itemSpacing);
-    const bool selected = (i == selectedIndex);
-    const char* labelText = options[i].c_str();
-
-    if (metrics.optionPopupDrawAllRows || selected) {
-      Color rowColor;
-      if (selected) {
-        rowColor = metrics.optionPopupSelectionLight ? Color::LightGray : Color::Black;
-      } else {
-        rowColor = Color::White;
-      }
-      if (selectionRadius > 0) {
-        renderer.fillRoundedRect(itemRectX, itemY, itemRectW, rowHeight, selectionRadius, rowColor);
-      } else {
-        renderer.fillRect(itemRectX, itemY, itemRectW, rowHeight, rowColor == Color::Black);
-      }
-    }
-
-    const int textW = renderer.getTextWidth(optionFontId, labelText, optionStyle);
-    const int textY = itemY + (rowHeight - optionLineHeight) / 2;
-    const int textX = itemRectX + (itemRectW - textW) / 2;
-    // Unselected items: text is dark (invert=true means draw on white bg).
-    // Selected on dark bg: text must be white (invert=false).
-    // Selected on light bg: text stays dark (invert=true).
-    const bool invertText = selected ? metrics.optionPopupSelectionLight : true;
-    renderer.drawText(optionFontId, textX, textY, labelText, invertText, optionStyle);
-  }
-}
-
-namespace {
-using covergrid::GRID_CELL_PADDING;
-using covergrid::GRID_COLS;
-using covergrid::GRID_ROWS;
-using covergrid::GRID_TITLE_AREA;
-
-// Blit the cached cover thumb into a cell, letterboxed to preserve aspect. Returns false when no
-// drawable BMP was available (0-byte negative-cache sentinel, unparseable header, or open failure)
-// so the caller can fall back to a folder/placeholder glyph.
-bool drawCellCover(GfxRenderer& renderer, const std::string& thumbPath, int thumbX, int thumbY, int thumbWidth,
-                   int thumbHeight) {
-  if (thumbPath.empty()) return false;
-  HalFile file;
-  bool drew = false;
-  if (Storage.openFileForRead("BSHELF", thumbPath, file)) {
-    if (file.size() > 0) {
-      Bitmap bitmap(file);
-      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        int coverX = thumbX;
-        int coverY = thumbY;
-        if (bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
-          const float imgRatio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
-          const float boxRatio = static_cast<float>(thumbWidth) / static_cast<float>(thumbHeight);
-          if (imgRatio > boxRatio) {
-            coverY = thumbY + (thumbHeight - static_cast<int>(thumbWidth / imgRatio)) / 2;
-          } else {
-            coverX = thumbX + (thumbWidth - static_cast<int>(thumbHeight * imgRatio)) / 2;
-          }
-        }
-        renderer.drawBitmap(bitmap, coverX, coverY, thumbWidth, thumbHeight);
-        drew = true;
-      }
-    }
-    file.close();
-  }
-  return drew;
-}
-
-void drawFolderGlyph(GfxRenderer& renderer, int thumbX, int thumbY, int thumbWidth, int thumbHeight, bool state) {
-  const int folderW = 80, bodyH = 50, tabW = 28, tabH = 12;
-  const int folderX = thumbX + (thumbWidth - folderW) / 2;
-  const int folderY = thumbY + (thumbHeight - (bodyH + tabH - 2)) / 2;
-  renderer.drawRoundedRect(folderX, folderY, tabW, tabH, 2, 4, true, true, false, false, state);
-  renderer.drawRoundedRect(folderX, folderY + tabH - 2, folderW, bodyH, 2, 6, state);
-}
-
-// Three centered dots: the placeholder for a cover whose thumbnail is still being generated.
-void drawLoadingGlyph(GfxRenderer& renderer, int thumbX, int thumbY, int thumbWidth, int thumbHeight, bool state) {
-  constexpr int dotSize = 8, dotGap = 10;
-  const int totalW = dotSize * 3 + dotGap * 2;
-  int dotX = thumbX + (thumbWidth - totalW) / 2;
-  const int dotY = thumbY + (thumbHeight - dotSize) / 2;
-  for (int i = 0; i < 3; i++) {
-    renderer.fillRect(dotX, dotY, dotSize, dotSize, state);
-    dotX += dotSize + dotGap;
-  }
-}
-}  // namespace
-
-void BaseTheme::drawCoverGrid(GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex, int pageOffset,
-                              const std::function<std::string(int)>& getTitle,
-                              const std::function<std::string(int)>& getThumbPath,
-                              const std::function<bool(int)>& isDirectory,
-                              const std::function<bool(int)>& isPending) const {
-  const int cellWidth = rect.width / GRID_COLS;
-  const int cellHeight = rect.height / GRID_ROWS;
-  const int thumbWidth = cellWidth - GRID_CELL_PADDING * 2;
-  const int thumbHeight = cellHeight - GRID_CELL_PADDING * 2 - GRID_TITLE_AREA;
-
-  const int pageEnd = std::min(pageOffset + GRID_COLS * GRID_ROWS, itemCount);
-
-  for (int i = pageOffset; i < pageEnd; i++) {
-    const int gridIdx = i - pageOffset;
-    const int col = gridIdx % GRID_COLS;
-    const int row = gridIdx / GRID_COLS;
-
-    const int cellX = rect.x + col * cellWidth;
-    const int cellY = rect.y + row * cellHeight;
-    const bool selected = (i == selectedIndex);
-
-    if (selected) {
-      renderer.fillRect(cellX + 2, cellY + 2, cellWidth - 4, cellHeight - 4);
-    }
-
-    const int thumbX = cellX + (cellWidth - thumbWidth) / 2;
-    const int thumbY = cellY + GRID_CELL_PADDING;
-
-    const bool dir = isDirectory(i);
-    if (dir) {
-      drawFolderGlyph(renderer, thumbX, thumbY, thumbWidth, thumbHeight, !selected);
-    } else if (!drawCellCover(renderer, getThumbPath(i), thumbX, thumbY, thumbWidth, thumbHeight) && isPending(i)) {
-      drawLoadingGlyph(renderer, thumbX, thumbY, thumbWidth, thumbHeight, !selected);
-    }
-
-    const std::string title = getTitle(i);
-    const int titleY = thumbY + thumbHeight + 1;
-    const int maxTitleWidth = cellWidth - GRID_CELL_PADDING * 2;
-    const auto truncated = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), maxTitleWidth);
-    const int titleTextWidth = renderer.getTextWidth(SMALL_FONT_ID, truncated.c_str());
-    const int titleX = cellX + (cellWidth - titleTextWidth) / 2;
-    renderer.drawText(SMALL_FONT_ID, titleX, titleY, truncated.c_str(), !selected);
-  }
-}
-
-void BaseTheme::drawCoverGridSelection(GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
-                                       int pageOffset, const std::function<std::string(int)>& getTitle,
-                                       const std::function<std::string(int)>& getThumbPath,
-                                       const std::function<bool(int)>& isDirectory,
-                                       const std::function<bool(int)>& isPending) const {
-  if (selectedIndex < pageOffset || selectedIndex >= std::min(pageOffset + GRID_COLS * GRID_ROWS, itemCount)) return;
-
-  const int cellWidth = rect.width / GRID_COLS;
-  const int cellHeight = rect.height / GRID_ROWS;
-  const int thumbWidth = cellWidth - GRID_CELL_PADDING * 2;
-  const int thumbHeight = cellHeight - GRID_CELL_PADDING * 2 - GRID_TITLE_AREA;
-
-  const int gridIdx = selectedIndex - pageOffset;
-  const int col = gridIdx % GRID_COLS;
-  const int row = gridIdx / GRID_COLS;
-
-  const int cellX = rect.x + col * cellWidth;
-  const int cellY = rect.y + row * cellHeight;
-
-  renderer.fillRect(cellX + 2, cellY + 2, cellWidth - 4, cellHeight - 4);
-
-  const int thumbX = cellX + (cellWidth - thumbWidth) / 2;
-  const int thumbY = cellY + GRID_CELL_PADDING;
-
-  const bool dir = isDirectory(selectedIndex);
-  if (dir) {
-    drawFolderGlyph(renderer, thumbX, thumbY, thumbWidth, thumbHeight, false);
-  } else if (!drawCellCover(renderer, getThumbPath(selectedIndex), thumbX, thumbY, thumbWidth, thumbHeight) &&
-             isPending(selectedIndex)) {
-    drawLoadingGlyph(renderer, thumbX, thumbY, thumbWidth, thumbHeight, false);
-  }
-
-  const std::string title = getTitle(selectedIndex);
-  const int titleY = thumbY + thumbHeight + 1;
-  const int maxTitleWidth = cellWidth - GRID_CELL_PADDING * 2;
-  const auto truncated = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), maxTitleWidth);
-  const int titleTextWidth = renderer.getTextWidth(SMALL_FONT_ID, truncated.c_str());
-  const int titleX = cellX + (cellWidth - titleTextWidth) / 2;
-  renderer.drawText(SMALL_FONT_ID, titleX, titleY, truncated.c_str(), false);
 }

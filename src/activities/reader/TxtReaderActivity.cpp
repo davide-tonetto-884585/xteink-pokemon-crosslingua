@@ -118,7 +118,7 @@ void TxtReaderActivity::buildPageIndex(GfxRenderer& renderer) {
   LOG_DBG("TRS", "Built page index: %d pages", totalPages);
 }
 
-bool TxtReaderActivity::loadPageAtOffset(GfxRenderer& renderer, size_t offset, std::vector<std::string>& outLines,
+bool TxtReaderActivity::loadPageAtOffset(const GfxRenderer& renderer, size_t offset, std::vector<std::string>& outLines,
                                          size_t& nextOffset) {
   outLines.clear();
   const size_t fileSize = txt->getFileSize();
@@ -314,7 +314,8 @@ void TxtReaderActivity::renderPage(GfxRenderer& renderer) {
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  renderLines();  // scan pass
+  renderLines();      // scan pass
+  renderStatusBar();  // scan: a CJK title joins the batch prewarm
   scope.endScanAndPrewarm();
 
   // BW rendering

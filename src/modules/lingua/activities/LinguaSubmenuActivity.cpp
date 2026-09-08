@@ -17,11 +17,14 @@
 #include "activities/reader/ReaderUtils.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
+#include "components/WrappedPopup.h"
 #include "fontIds.h"
 #include "modules/lingua/LinguaModeCatalog.h"
 #include "modules/lingua/activities/LanguagePickerActivity.h"
 #include "modules/lingua/engines/ParagraphTranslator.h"  // ParagraphTranslator::engineNeedsApiKey()
 #include "modules/lingua/services/TranslatedContentDetector.h"
+
+namespace fui = freeink::ui;
 
 // Toast duration mirrors EpubReaderActivity's auto-fallback toast.
 static constexpr unsigned long DEFAULT_TOAST_MS = ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS;
@@ -33,12 +36,14 @@ static constexpr uint8_t AUTO_DETECT_SENTINEL = 0xFF;
 
 LinguaSubmenuActivity::LinguaSubmenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                              std::shared_ptr<Epub> epub, int currentSpineIndex)
-    : Activity("LinguaSubmenu", renderer, mappedInput), epub(std::move(epub)), currentSpineIndex(currentSpineIndex) {}
+    : UiListActivity("LinguaSubmenu", renderer, mappedInput),
+      epub(std::move(epub)),
+      currentSpineIndex(currentSpineIndex) {}
 
 // ─── lifecycle ────────────────────────────────────────────────────────────────
 
 void LinguaSubmenuActivity::onEnter() {
-  Activity::onEnter();
+  UiListActivity::onEnter();
   rebuildAfterReturn();
 }
 
@@ -84,13 +89,7 @@ void LinguaSubmenuActivity::rebuildAfterReturn() {
   }
 
   buildMenuItems();
-  // Keep the cursor inside the (potentially shorter) list after a delete.
-  if (selectedIndex >= static_cast<int>(menuItems.size())) {
-    selectedIndex = static_cast<int>(menuItems.size()) - 1;
-  }
-  if (selectedIndex < 0) {
-    selectedIndex = 0;
-  }
+  syncRowItems();
   requestUpdate();
 }
 
@@ -193,46 +192,38 @@ void LinguaSubmenuActivity::appendModeChildren() {
 
 // ─── input ────────────────────────────────────────────────────────────────────
 
-void LinguaSubmenuActivity::loop() {
+bool LinguaSubmenuActivity::handleCustomInput() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) {
     // Match EpubReaderMenuActivity: OptionPopup acts on the press edge, so
     // keep the trailing release away from the menu underneath.
     popupClosing = !optionPopup.isActive();
-    return;
+    return true;
   }
   if (popupClosing) {
     if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
         mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
-      return;
+      return true;
     }
     popupClosing = false;
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
         mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      return;
+      return true;
     }
   }
 
-  // Auto-dismiss the toast overlay once its duration elapses.
+  // Auto-dismiss the toast overlay once its duration elapses. Never consumes the pass: the toast is
+  // an overlay on the list, not a modal.
   if (showingToast && (millis() - toastShownAtMs) >= toastDurationMs) {
     showingToast = false;
     requestUpdate();
   }
+  return false;
+}
 
-  buttonNavigator.onNext([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
-
-  buttonNavigator.onPrevious([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
-
+bool LinguaSubmenuActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedIndex >= 0 && selectedIndex < static_cast<int>(menuItems.size())) {
-      onActionSelected(menuItems[selectedIndex].action);
-    }
-    return;
+    activateIndex(nav.selected);
+    return true;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -241,8 +232,19 @@ void LinguaSubmenuActivity::loop() {
     result.data = MenuResult{};
     setResult(std::move(result));
     finish();
-    return;
+    return true;
   }
+  return false;
+}
+
+void LinguaSubmenuActivity::activateIndex(const int index) {
+  if (optionPopup.isActive()) return;
+  if (index < 0 || index >= static_cast<int>(menuItems.size())) return;
+  // The activated row opens a popup or leaves this screen; a lingering flash would gray an
+  // unrelated element on the next render.
+  app.clearTapFlash();
+  nav.selected = index;
+  onActionSelected(menuItems[index].action);
 }
 
 // ─── action dispatch ──────────────────────────────────────────────────────────
@@ -267,9 +269,7 @@ void LinguaSubmenuActivity::onActionSelected(Action a) {
                            SETTINGS.saveToFile();
                            // Each mode owns a different block of child settings.
                            buildMenuItems();
-                           if (selectedIndex >= static_cast<int>(menuItems.size())) {
-                             selectedIndex = static_cast<int>(menuItems.size()) - 1;
-                           }
+                           syncRowItems();
                          }
                          requestUpdate();
                        });
@@ -369,9 +369,7 @@ void LinguaSubmenuActivity::onActionSelected(Action a) {
                            SETTINGS.saveToFile();
                            // Keyed engines expose the API-key row; keyless engines hide it.
                            buildMenuItems();
-                           if (selectedIndex >= static_cast<int>(menuItems.size())) {
-                             selectedIndex = static_cast<int>(menuItems.size()) - 1;
-                           }
+                           syncRowItems();
                          }
                          requestUpdate();
                        });
@@ -622,90 +620,119 @@ void LinguaSubmenuActivity::showToast(const char* msg, unsigned long durationMs)
 
 // ─── render ───────────────────────────────────────────────────────────────────
 
-void LinguaSubmenuActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+void LinguaSubmenuActivity::syncRowItems() {
+  rowItems.assign(menuItems.size(), fui::ListItem{});
+  bool headingPlaced = false;
+  for (size_t i = 0; i < menuItems.size(); i++) {
+    rowItems[i].label = I18N.get(menuItems[i].labelId);
+    rowItems[i].actionValue = static_cast<int16_t>(i);
+    // The sub-settings of the selected display mode are grouped under a heading naming that mode,
+    // so it reads as "these belong to that mode". Replaces the drawing-offset indent the pre-FUI
+    // list used: a bidi-reordered title cannot carry an indent of its own (an RTL label moves its
+    // leading run to the visual right), and FreeInkUI rows have no per-row indent.
+    if (menuItems[i].isChild && !headingPlaced) {
+      rowItems[i].sectionHeading = displayModeLabel();
+      headingPlaced = true;
+    }
+  }
+  // Keep the cursor inside the (potentially shorter) list after a delete or a mode change.
+  nav.selected = std::min(nav.selected, static_cast<int>(menuItems.size()) - 1);
+  nav.selected = std::max(nav.selected, 0);
+}
 
-  const auto metrics = UITheme::getInstance().getMetrics();
+const char* LinguaSubmenuActivity::rowValue(const int index) {
+  switch (menuItems[index].action) {
+    case Action::CYCLE_DISPLAY_MODE:
+      return displayModeLabel();
+    case Action::CYCLE_ENGINE:
+      return engineLabel();
+    case Action::CYCLE_TOOLTIP_BUTTONS:
+      return tooltipButtonsLabel();
+    case Action::CYCLE_TOOLTIP_BEHAVIOR:
+      return tooltipBehaviorLabel();
+    case Action::CYCLE_PAGE_TRANSLATION_BUTTONS:
+      return pageTranslationButtonsLabel();
+    case Action::CYCLE_TRANSLATION_COLOUR:
+      return translationColourLabel();
+    case Action::CYCLE_INTERLINEAR_COLOUR:
+      return linguaShadeLabel(SETTINGS.interlinearAnnotationShade);
+    case Action::CYCLE_INTERLINEAR_TOGGLE_LONG_PRESS:
+      return I18N.get(SETTINGS.interlinearToggleByLongPress ? StrId::STR_ON : StrId::STR_OFF);
+    case Action::CYCLE_INTERLINEAR_TOGGLE_BUTTONS:
+      return overlayButtonsLabel(SETTINGS.interlinearToggleButtons);
+    case Action::CYCLE_SIDE_BY_SIDE_COLOUR:
+      return linguaShadeLabel(SETTINGS.sideBySideTranslationShade);
+    case Action::CYCLE_INTERLEAVED_SIZE:
+      return translationSizeLabel(SETTINGS.interleavedTranslationSize);
+    case Action::CYCLE_TOOLTIP_SIZE:
+      return translationSizeLabel(SETTINGS.tooltipTranslationSize);
+    case Action::CYCLE_PAGE_TRANSLATION_SIZE:
+      return translationSizeLabel(SETTINGS.pageTranslationSize);
+    case Action::PICK_TARGET_LANG:
+      return targetLangLabel();
+    case Action::PICK_SOURCE_LANG:
+      return sourceLangLabel();
+    case Action::ENTER_API_KEY:
+      // Bullet-masked or "(none)". ListItem::value borrows, so it goes to the member buffer.
+      maskedApiKey(apiKeyMasked, sizeof(apiKeyMasked));
+      return apiKeyMasked;
+    // Plain command rows: no value column. Listed explicitly, with no `default:`, for the same
+    // reason onActionSelected() has none — an Action added without deciding what its value
+    // column shows must fail the build here (-Werror=switch), not silently render blank.
+    case Action::TRANSLATE_CHAPTER:
+    case Action::TRANSLATE_BOOK:
+    case Action::DELETE_TRANSLATIONS:
+      return nullptr;
+  }
+  return nullptr;  // unreachable: every enumerator returns above
+}
+
+void LinguaSubmenuActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  // Content: the safe area minus the header band drawChrome() paints.
+  screen.setContentMarginFromScreen(fui::Insets{
+      static_cast<int16_t>(safe.y + metrics.topPadding + metrics.headerHeight),
+      static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
+      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+
+  // Labels and headings were set by syncRowItems(); only the value column reflects live state.
+  for (size_t i = 0; i < rowItems.size(); i++) {
+    rowItems[i].value = rowValue(static_cast<int>(i));
+  }
+
+  fui::ListProps props;
+  props.items = rowItems.data();
+  props.count = static_cast<uint16_t>(rowItems.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
+  props.valueInset = 8;               // air between the value and the row edge
+  // Label at the value's font size: both sides of the row read as one unit.
+  // maxLines=2 also marks the style caller-owned (see textStyleUnset).
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 2;
+  syncListViewport(screen, props);
+  screen.list(props);
+}
+
+void LinguaSubmenuActivity::drawChrome() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  tr(STR_LINGUA));
+}
 
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
-
-  GUI.drawList(
-      renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, static_cast<int>(menuItems.size()),
-      selectedIndex, [this](int index) -> std::string { return I18N.get(menuItems[index].labelId); },
-      /*rowSubtitle=*/nullptr,
-      /*rowIcon=*/nullptr,
-      [this](int index) -> std::string {
-        const auto act = menuItems[index].action;
-        switch (act) {
-          case Action::CYCLE_DISPLAY_MODE:
-            return displayModeLabel();
-          case Action::CYCLE_ENGINE:
-            return engineLabel();
-          case Action::CYCLE_TOOLTIP_BUTTONS:
-            return tooltipButtonsLabel();
-          case Action::CYCLE_TOOLTIP_BEHAVIOR:
-            return tooltipBehaviorLabel();
-          case Action::CYCLE_PAGE_TRANSLATION_BUTTONS:
-            return pageTranslationButtonsLabel();
-          case Action::CYCLE_TRANSLATION_COLOUR:
-            return translationColourLabel();
-          case Action::CYCLE_INTERLINEAR_COLOUR:
-            return linguaShadeLabel(SETTINGS.interlinearAnnotationShade);
-          case Action::CYCLE_INTERLINEAR_TOGGLE_LONG_PRESS:
-            return I18N.get(SETTINGS.interlinearToggleByLongPress ? StrId::STR_ON : StrId::STR_OFF);
-          case Action::CYCLE_INTERLINEAR_TOGGLE_BUTTONS:
-            return overlayButtonsLabel(SETTINGS.interlinearToggleButtons);
-          case Action::CYCLE_SIDE_BY_SIDE_COLOUR:
-            return linguaShadeLabel(SETTINGS.sideBySideTranslationShade);
-          case Action::CYCLE_INTERLEAVED_SIZE:
-            return translationSizeLabel(SETTINGS.interleavedTranslationSize);
-          case Action::CYCLE_TOOLTIP_SIZE:
-            return translationSizeLabel(SETTINGS.tooltipTranslationSize);
-          case Action::CYCLE_PAGE_TRANSLATION_SIZE:
-            return translationSizeLabel(SETTINGS.pageTranslationSize);
-          case Action::PICK_TARGET_LANG:
-            return targetLangLabel();
-          case Action::PICK_SOURCE_LANG:
-            return sourceLangLabel();
-          case Action::ENTER_API_KEY: {
-            // Bullet-masked or "(none)"; bounded stack buffer keeps it cheap.
-            char buf[32];
-            maskedApiKey(buf, sizeof(buf));
-            return std::string(buf);
-          }
-          // Plain command rows: no value column. Listed explicitly, with no `default:`, for the same
-          // reason onActionSelected() has none — an Action added without deciding what its value
-          // column shows must fail the build here (-Werror=switch), not silently render blank.
-          case Action::TRANSLATE_CHAPTER:
-          case Action::TRANSLATE_BOOK:
-          case Action::DELETE_TRANSLATIONS:
-            return "";
-        }
-        return "";  // unreachable: every enumerator returns above
-      },
-      /*highlightValue=*/true, /*rowDimmed=*/nullptr,
-      // Sub-setting rows are indented by a DRAWING offset, not by leading spaces in the title: a
-      // title goes through bidi before it is drawn, so for an Arabic or Hebrew label drawText
-      // resolves an RTL paragraph and moves the leading run to the visual right -- the indent would
-      // land on the wrong side, wedged against the right-aligned value column. See kListChildIndent.
-      [this](int index) { return menuItems[index].isChild; });
-
-  // Button hints follow EpubReaderMenuActivity's pattern (Back / Select / Up / Down).
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+void LinguaSubmenuActivity::render(RenderLock&& lock) {
+  // List, header and button hints, in the base's order (it also re-runs the build when wrapped
+  // labels shrank the page).
+  UiListActivity::render(std::move(lock));
 
   if (showingToast && toastMessage) {
     // Toasts here include STR_NO_TRANSLATION_SWITCH_NORMAL, which is long in many languages and
-    // overflows GUI.drawPopup's single-line box; wrap it to the viewable area instead.
-    GUI.drawWrappedPopup(renderer, toastMessage);
+    // overflows drawPopup's single-line box; wrap it to the viewable area instead. Flushes itself.
+    drawWrappedPopup(renderer, toastMessage);
   }
 
-  if (optionPopup.processRender(renderer, mappedInput)) return;
-
-  renderer.displayBuffer();
+  optionPopup.processRender(renderer, mappedInput);
 }

@@ -9,9 +9,8 @@
 #include <memory>
 #include <vector>
 
-#include "activities/Activity.h"
+#include "activities/UiListActivity.h"
 #include "components/OptionPopup.h"
-#include "util/ButtonNavigator.h"
 
 // Typed request the submenu hands back to the reader when the user picks a
 // translate action. The submenu itself no longer launches the translator (that
@@ -29,7 +28,9 @@ enum class LinguaResult : uint8_t {
  * Consolidated submenu that aggregates every Lingua action and setting
  * into a single screen launched from the EPUB reader menu.
  *
- * Mirrors EpubReaderMenuActivity's vertical list pattern. Selecting most items
+ * Mirrors EpubReaderMenuActivity: a single FreeInkUI list screen (UiListActivity), so it gets
+ * touch, swipe scrolling and button navigation from the same base every upstream list uses.
+ * Selecting most items
  * spawns a child activity (translate / language picker / API-key keyboard);
  * cyclical items mutate SETTINGS and re-render in place.
  *
@@ -37,7 +38,7 @@ enum class LinguaResult : uint8_t {
  * state so labels like "Translate Chapter" flip to "Re-translate Chapter" and
  * the "Delete Translations" entry appears once any chapter has been translated.
  */
-class LinguaSubmenuActivity final : public Activity {
+class LinguaSubmenuActivity final : public UiListActivity {
  public:
   enum class Action : uint8_t {
     CYCLE_DISPLAY_MODE,
@@ -78,7 +79,6 @@ class LinguaSubmenuActivity final : public Activity {
 
   void onEnter() override;
   void onExit() override;
-  void loop() override;
   void render(RenderLock&&) override;
 
  private:
@@ -93,8 +93,12 @@ class LinguaSubmenuActivity final : public Activity {
   std::shared_ptr<Epub> epub;
   int currentSpineIndex;
   std::vector<MenuItem> menuItems;
-  int selectedIndex = 0;
-  ButtonNavigator buttonNavigator;
+  // FreeInkUI row mirror of menuItems, rebuilt whenever menuItems changes. Labels and values are
+  // borrowed const char* (I18N tables, LANGUAGES[], apiKeyMasked) — nothing here owns a string.
+  std::vector<freeink::ui::ListItem> rowItems;
+  // Backing store for the ENTER_API_KEY row's value: ListItem::value borrows, so the masked key
+  // needs storage that outlives buildScreen().
+  char apiKeyMasked[32]{};
   OptionPopup optionPopup;
   // Same press-to-close / release-to-swallow bridge as EpubReaderMenuActivity.
   bool popupClosing = false;
@@ -117,7 +121,22 @@ class LinguaSubmenuActivity final : public Activity {
   unsigned long toastDurationMs = 0UL;
   const char* toastMessage = nullptr;
 
+  int listCount() const override { return static_cast<int>(menuItems.size()); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  // Popup and toast run before any button or touch handling.
+  bool handleCustomInput() override;
+  // Back returns a cancelled result to the reader; Confirm activates the selection.
+  bool handleButtons() override;
+  // Header inside the safe area, so the battery indicator is not clipped.
+  void drawChrome() override;
+
   void buildMenuItems();
+  // Mirrors menuItems into rowItems and keeps the selection inside the (possibly shorter) list.
+  // Call after every buildMenuItems().
+  void syncRowItems();
+  // Right-hand value for a row, or nullptr for the plain command rows that have no value column.
+  const char* rowValue(int index);
   // Sub-settings of the currently selected display mode, appended directly under the Display Mode
   // row. Empty for modes that have none.
   void appendModeChildren();
