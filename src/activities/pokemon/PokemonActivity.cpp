@@ -930,8 +930,10 @@ bool PokemonActivity::trainerAiShouldActInsteadOfMoveThisTurn(char* const buffer
   // doing so would let it escape a lock that's supposed to cost a real
   // turn, making the player's own trapping moves a no-op against any
   // switch-capable trainer.
+  // A Hyper Beam recharge turn is likewise no choice at all: healing here left
+  // the recharge pending, so the trainer lost the following turn too.
   if (battleOpponent_.trappedTurnsRemaining > 0 || battleOpponent_.forcedMoveId != 0 ||
-      battleOpponent_.bideTurnsRemaining > 0) {
+      battleOpponent_.bideTurnsRemaining > 0 || battleOpponent_.mustRecharge) {
     return false;
   }
   const pokemon::GymData* gym = pokemon::gymData(gymChallengeIndex_);
@@ -945,6 +947,7 @@ bool PokemonActivity::trainerAiShouldActInsteadOfMoveThisTurn(char* const buffer
     battleOpponent_.currentHp = battleOpponent_.maxHp;
     battleOpponent_.status = pokemon::Ailment::None;
     battleOpponent_.statusTurns = 0;
+    battleOpponent_.toxicCounter = 0;  // only ever valid alongside Poison
     --opponentHealChargesRemaining_;
     snprintf(buffer, size, tr(STR_POKEMON_TRAINER_HEALED), leaderName);
     return true;
@@ -2110,9 +2113,11 @@ void PokemonActivity::activate() {
       // player could freely Switch out (for free - setupBattlePlayer()
       // just resets the combatant) or Run to escape a lock that's
       // supposed to cost a real turn.
+      // A Hyper Beam recharge turn too: using an item only postponed the
+      // recharge to the next FIGHT, and switching dropped it for free.
       const bool lockedIntoContinuation =
           battlePlayer_.forcedMoveId != 0 || battlePlayer_.bideTurnsRemaining > 0 ||
-          battlePlayer_.trappedTurnsRemaining > 0;
+          battlePlayer_.trappedTurnsRemaining > 0 || battlePlayer_.mustRecharge;
       if (lockedIntoContinuation && selected_ != 0) {
         showMessage(tr(STR_POKEMON_NOT_APPLICABLE), Screen::Battle);
         return;
@@ -2120,6 +2125,11 @@ void PokemonActivity::activate() {
       if (selected_ == 0) {
         if (battlePlayerMoveCount() == 0) {
           showMessage(tr(STR_POKEMON_NOT_APPLICABLE), Screen::Battle);
+          return;
+        }
+        // Recharging: no move choice to make, the turn is spent regardless.
+        if (battlePlayer_.mustRecharge) {
+          resolveBattlePlayerMoveTurn(pokemon::BATTLE_MOVE_SLOTS);
           return;
         }
         // Mid-charge (Fly/Dig/...), mid-trap (Wrap/Bind/...), or bracing for
@@ -2520,7 +2530,7 @@ void PokemonActivity::goBack() {
       // trap) for the same reason the on-screen RUN option is - see the
       // matching check in the Screen::Battle activate() case.
       if (battlePlayer_.forcedMoveId != 0 || battlePlayer_.bideTurnsRemaining > 0 ||
-          battlePlayer_.trappedTurnsRemaining > 0) {
+          battlePlayer_.trappedTurnsRemaining > 0 || battlePlayer_.mustRecharge) {
         return;
       }
       // Same real Gen 1 run-away odds as the on-screen RUN option - see its

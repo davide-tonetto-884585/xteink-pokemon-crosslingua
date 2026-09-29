@@ -1,3 +1,10 @@
+## [Unreleased]
+
+### Fixed
+
+- Battle: on the turn after Hyper Beam your Pokémon has to recharge, but the menu still let you use an item (the recharge then happened on your next attack instead) or switch out (skipping the recharge entirely). That turn now only allows FIGHT, which spends it recharging, like the original games.
+- Gym battles: a trainer no longer uses its heal on the turn its Pokémon is recharging from Hyper Beam (it used to lose the following turn as well), and a heal now fully clears a Toxic poisoning instead of leaving part of it behind.
+
 ## [1.2.3] - 2026-09-25
 
 ### Fixed
