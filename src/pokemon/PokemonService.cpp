@@ -698,9 +698,12 @@ ServiceStatus PokemonService::useVitamin(const uint32_t recordId, const uint8_t 
 }
 
 UseConsumableOutcome PokemonService::useConsumableImpl(const uint32_t recordId, const uint8_t itemId,
-                                                        const bool dryRun) {
+                                                        const bool dryRun, const ConsumableUse use) {
   const ItemData* item = itemData(itemId);
   if (item == nullptr) return UseConsumableOutcome::Failed;
+  if (restoresSingleMovePp(itemId) && (use.moveSlot < 0 || use.moveSlot >= static_cast<int>(BATTLE_MOVE_SLOTS))) {
+    return UseConsumableOutcome::Failed;
+  }
 
   PokemonRecord record{};
   if (readRecord(recordId, record) != ServiceStatus::Ok) return UseConsumableOutcome::Failed;
@@ -737,6 +740,10 @@ UseConsumableOutcome PokemonService::useConsumableImpl(const uint32_t recordId, 
   if (stats == nullptr) return UseConsumableOutcome::Failed;
   BattleRecordEntry entry{};
   if (loadBattleEntry(recordId, entry) != ServiceStatus::Ok) return UseConsumableOutcome::Failed;
+  if (!use.confusionIsLive && entry.status == Ailment::Confusion) {
+    entry.status = Ailment::None;  // stale - see ConsumableUse::confusionIsLive
+    entry.statusTurns = 0;
+  }
   const IvEvEntry ivEv = ensureIvEv(recordId);
   constexpr size_t hpIndex = static_cast<size_t>(StatIndex::Hp);
   const uint16_t maxHp = battleMaxHp(stats->hp, level, ivEv.iv[hpIndex], ivEv.ev[hpIndex]);
@@ -757,7 +764,11 @@ UseConsumableOutcome PokemonService::useConsumableImpl(const uint32_t recordId, 
     }
   } else if (entry.currentHp > 0) {
     if (item->category == ItemCategory::Medicine && entry.currentHp < maxHp) {
-      const uint32_t healed = static_cast<uint32_t>(entry.currentHp) + item->effectValue;
+      // effectValue 255 (Max Potion, Full Restore) means "to full": a high-level Pokemon's max HP
+      // goes well past 255 (a level-100 Chansey has ~700), so a flat +255 left it short.
+      const uint32_t healed = item->effectValue == UINT8_MAX
+                                  ? maxHp
+                                  : static_cast<uint32_t>(entry.currentHp) + item->effectValue;
       entry.currentHp = static_cast<uint16_t>(std::min<uint32_t>(maxHp, healed));
       changed = true;
     }
@@ -775,6 +786,7 @@ UseConsumableOutcome PokemonService::useConsumableImpl(const uint32_t recordId, 
     if (item->category == ItemCategory::PPRestore) {
       for (size_t slot = 0; slot < BATTLE_MOVE_SLOTS; ++slot) {
         if (entry.moves[slot] == 0) continue;
+        if (restoresSingleMovePp(itemId) && slot != static_cast<size_t>(use.moveSlot)) continue;
         const MoveData* move = moveData(entry.moves[slot]);
         const uint8_t maxPp = move == nullptr ? 0 : maxPpFor(move->pp, entry.ppUp[slot]);
         if (entry.pp[slot] >= maxPp) continue;
@@ -793,18 +805,20 @@ UseConsumableOutcome PokemonService::useConsumableImpl(const uint32_t recordId, 
   return UseConsumableOutcome::Applied;
 }
 
-UseConsumableOutcome PokemonService::useConsumable(const uint32_t recordId, const uint8_t itemId) {
-  return useConsumableImpl(recordId, itemId, /*dryRun=*/false);
+UseConsumableOutcome PokemonService::useConsumable(const uint32_t recordId, const uint8_t itemId,
+                                                    const ConsumableUse use) {
+  return useConsumableImpl(recordId, itemId, /*dryRun=*/false, use);
 }
 
-UseConsumableOutcome PokemonService::useConsumableAndConsumeItem(const uint32_t recordId, const uint8_t itemId) {
-  const UseConsumableOutcome eligible = useConsumableImpl(recordId, itemId, /*dryRun=*/true);
+UseConsumableOutcome PokemonService::useConsumableAndConsumeItem(const uint32_t recordId, const uint8_t itemId,
+                                                                  const ConsumableUse use) {
+  const UseConsumableOutcome eligible = useConsumableImpl(recordId, itemId, /*dryRun=*/true, use);
   if (eligible != UseConsumableOutcome::Applied) return eligible;
 
   const ServiceStatus consumed = consumeBagItem(itemId);
   if (consumed != ServiceStatus::Ok) return UseConsumableOutcome::Failed;
 
-  const UseConsumableOutcome applied = useConsumableImpl(recordId, itemId, /*dryRun=*/false);
+  const UseConsumableOutcome applied = useConsumableImpl(recordId, itemId, /*dryRun=*/false, use);
   if (applied == UseConsumableOutcome::Applied) return UseConsumableOutcome::Applied;
 
   // The effect did not actually land, so give the item back rather than
@@ -1232,6 +1246,11 @@ void PokemonService::healPartyOnRead(const PokemonState& state, const uint16_t m
       }
     }
 
+    // Confusion is volatile (it ends with the battle), so a persisted one is stale.
+    if (healed.status == Ailment::Confusion) {
+      healed.status = Ailment::None;
+      healed.statusTurns = 0;
+    }
     if (healed.currentHp >= maxHp && healed.status != Ailment::None) {
       healed.status = Ailment::None;
       healed.statusTurns = 0;

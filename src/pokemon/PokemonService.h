@@ -41,6 +41,19 @@ enum class TeachMoveOutcome : uint8_t {
   Failed,
 };
 
+// Ether/Max Ether restore one move's PP (the player picks it), unlike
+// Elixir/Max Elixir which restore every move.
+constexpr bool restoresSingleMovePp(const uint8_t itemId) { return itemId == 25 || itemId == 26; }
+
+struct ConsumableUse {
+  // The move slot an Ether/Max Ether restores; required for those two, ignored otherwise.
+  int moveSlot = -1;
+  // Confusion is volatile: it only matters on the Pokemon currently fighting.
+  // Anywhere else a persisted Confusion is stale, so it is dropped rather than
+  // letting a Full Heal be spent "curing" it.
+  bool confusionIsLive = false;
+};
+
 enum class UseConsumableOutcome : uint8_t {
   Applied,
   NotApplicable,
@@ -243,7 +256,8 @@ class PokemonService {
   // gets the check/consume/apply ordering right; this bare version stays
   // around for callers (mid-battle item use, tests) that manage the bag
   // decrement themselves for other reasons.
-  UseConsumableOutcome useConsumable(uint32_t recordId, uint8_t itemId);
+  // `use` carries the two per-use details a few items need (see ConsumableUse).
+  UseConsumableOutcome useConsumable(uint32_t recordId, uint8_t itemId, ConsumableUse use = {});
 
   // Same effect as useConsumable(), but also spends `itemId` from the bag as
   // part of it, in the right order: checks whether the item would have any
@@ -255,7 +269,7 @@ class PokemonService {
   // consumeBagItem() could keep the healed HP/cured status/leveled-up Candy
   // even if that second write failed), the item is handed back and Failed is
   // returned - same reasoning as usePpUp()/useVitamin().
-  UseConsumableOutcome useConsumableAndConsumeItem(uint32_t recordId, uint8_t itemId);
+  UseConsumableOutcome useConsumableAndConsumeItem(uint32_t recordId, uint8_t itemId, ConsumableUse use = {});
 
   // Thin wrappers around the pure engine (PokemonBattle.h) using this
   // service's own RandomSource, so the UI layer never touches RNG directly -
@@ -368,7 +382,7 @@ class PokemonService {
   // Candy/Medicine/StatusCure/PPRestore branches share this same read-then-
   // decide-then-write shape), so callers can check applicability before
   // touching the bag without duplicating all of that branching.
-  UseConsumableOutcome useConsumableImpl(uint32_t recordId, uint8_t itemId, bool dryRun);
+  UseConsumableOutcome useConsumableImpl(uint32_t recordId, uint8_t itemId, bool dryRun, ConsumableUse use);
   void healPartyOnRead(const PokemonState& state, uint16_t minutes, uint8_t previousMinuteRemainder);
   // Checks the leader's learnset for any move newly available between
   // previousLevel (exclusive) and currentLevel (inclusive): auto-fills an

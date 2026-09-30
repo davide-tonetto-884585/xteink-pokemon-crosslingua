@@ -49,6 +49,8 @@ class PokemonActivity final : public Activity {
     BagMachine,
     ItemTarget,
     PpUpSlot,
+    // Ether/Max Ether: which move of the chosen Pokemon gets its PP back.
+    EtherSlot,
     Pokedex,
     PokedexDetail,
     Event,
@@ -140,6 +142,13 @@ class PokemonActivity final : public Activity {
   void savePlayerBattleEntry();
   void resolveBattleAsPass();
   void finishItemUseMidBattle(const char* usedLine);
+  // A Medicine-category item just landed on `recordId` mid-battle: syncs the live
+  // combatant if it was the target, then spends the turn.
+  void finishBattleMedicine(uint32_t recordId);
+  // Applies selectedMedicineItemId_ to `recordId` from the Bag (in or out of
+  // battle); `moveSlot` is the Ether/Max Ether target, -1 otherwise.
+  void applyMedicine(uint32_t recordId, int moveSlot);
+  bool isActiveBattler(uint32_t recordId) const;
   bool routeAfterOpponentOnlyTurn(const pokemon::BattleTurnResult& result);
   bool syncBattlePlayerAfterXpAward();
   void finishBattleAfterWildFainted();

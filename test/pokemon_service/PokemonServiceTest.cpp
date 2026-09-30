@@ -2197,7 +2197,7 @@ TEST(PokemonService, UseConsumableRejectsPlainMedicineOnAFaintedPokemonAndRequir
   EXPECT_EQ(service.useConsumable(1, 11), pokemon::UseConsumableOutcome::NotApplicable);  // Potion
   EXPECT_EQ(service.useConsumable(1, 17), pokemon::UseConsumableOutcome::NotApplicable);  // Full Restore
   EXPECT_EQ(service.useConsumable(1, 22), pokemon::UseConsumableOutcome::NotApplicable);  // Paralyze Heal
-  EXPECT_EQ(service.useConsumable(1, 25), pokemon::UseConsumableOutcome::NotApplicable);  // Ether
+  EXPECT_EQ(service.useConsumable(1, 25, {0, false}), pokemon::UseConsumableOutcome::NotApplicable);  // Ether
   const pokemon::BattleRecordEntry* untouched = battleStore.findEntry(1);
   ASSERT_NE(untouched, nullptr);
   EXPECT_EQ(untouched->currentHp, 0U);
@@ -2272,6 +2272,39 @@ TEST(PokemonService, UseConsumableFullRestoreHealsAndCuresAnyStatus) {
   EXPECT_EQ(restored->status, pokemon::Ailment::None);
 }
 
+// Max Potion/Full Restore restore to full: a flat +255 left a high-level
+// Pokemon (max HP well past 255) short.
+TEST(PokemonService, MaxPotionRestoresFullHpAboveTwoHundredFiftyFive) {
+  Storage.clear();
+  pokemon::PokemonStore store;
+  pokemon::PokemonBattleStore battleStore;
+  pokemon::PokemonIvEvStore ivEvStore;
+  seedStarter(store);
+  pokemon::PokemonRecord pikachu{};
+  ASSERT_TRUE(store.readRecord(1, pikachu));
+  pikachu.totalXp = pokemon::xpRequired(100);
+  pikachu.speciesId = 143;  // Snorlax: max HP well past 255 at level 100
+  pikachu.gender = pokemon::Gender::Male;
+  pokemon::PokemonState state{};
+  ASSERT_TRUE(store.loadState(state));
+  ASSERT_TRUE(pokemon::markSpecies(state.seenSpecies, 143));
+  ASSERT_TRUE(pokemon::markSpecies(state.caughtSpecies, 143));
+  ASSERT_TRUE(store.commit(state, pokemon::RecordMutation{1, pikachu, pokemon::RecordMutationKind::Replace}));
+  pokemon::PokemonHallOfFameStore hallOfFameStore;
+  pokemon::PokemonService service(store, battleStore, ivEvStore, hallOfFameStore, {nullptr, zeroRandom});
+
+  pokemon::BattleRecordEntry entry{};
+  ASSERT_EQ(service.loadBattleEntry(1, entry), pokemon::ServiceStatus::Ok);
+  const uint16_t maxHp = entry.currentHp;
+  ASSERT_GT(maxHp, 256U);
+  for (const uint8_t itemId : {static_cast<uint8_t>(14), static_cast<uint8_t>(17)}) {  // Max Potion, Full Restore
+    entry.currentHp = 1;
+    ASSERT_EQ(service.saveBattleEntry(entry), pokemon::ServiceStatus::Ok);
+    EXPECT_EQ(service.useConsumable(1, itemId), pokemon::UseConsumableOutcome::Applied);
+    EXPECT_EQ(battleStore.findEntry(1)->currentHp, maxHp);
+  }
+}
+
 // Round 5 audit bug 3.1: toxicCounter is only ever valid while status ==
 // Poison (validateBattleRecordEntry) - curing Poison via an item must clear
 // it too, or the persisted entry becomes invalid and silently fails to save.
@@ -2297,7 +2330,9 @@ TEST(PokemonService, UseConsumableCuringPoisonAlsoClearsTheToxicCounter) {
   EXPECT_EQ(cured->toxicCounter, 0U);
 }
 
-TEST(PokemonService, UseConsumablePPRestoreTopsUpEveryKnownMoveSlot) {
+// Ether/Max Ether restore only the move the player picked; Elixir/Max Elixir
+// restore every move.
+TEST(PokemonService, EtherRestoresOnlyThePickedMoveAndElixirRestoresEveryMove) {
   Storage.clear();
   pokemon::PokemonStore store;
   pokemon::PokemonBattleStore battleStore;
@@ -2309,17 +2344,54 @@ TEST(PokemonService, UseConsumablePPRestoreTopsUpEveryKnownMoveSlot) {
   pokemon::BattleRecordEntry entry{};
   ASSERT_EQ(service.loadBattleEntry(1, entry), pokemon::ServiceStatus::Ok);
   entry.pp[0] = 5;
-  entry.pp[1] = 40;  // already full - Ether shouldn't touch it
+  entry.pp[1] = 7;
   ASSERT_EQ(service.saveBattleEntry(entry), pokemon::ServiceStatus::Ok);
 
-  EXPECT_EQ(service.useConsumable(1, 25), pokemon::UseConsumableOutcome::Applied);  // Ether, +10 PP
-  const pokemon::BattleRecordEntry* restored = battleStore.findEntry(1);
-  ASSERT_NE(restored, nullptr);
-  EXPECT_EQ(restored->pp[0], 15U);
-  EXPECT_EQ(restored->pp[1], 40U);
+  EXPECT_EQ(service.useConsumable(1, 25), pokemon::UseConsumableOutcome::Failed);  // Ether needs a move
+  EXPECT_EQ(service.useConsumable(1, 25, {1, false}), pokemon::UseConsumableOutcome::Applied);  // Ether, +10
+  EXPECT_EQ(battleStore.findEntry(1)->pp[0], 5U);
+  EXPECT_EQ(battleStore.findEntry(1)->pp[1], 17U);
+  EXPECT_EQ(service.useConsumable(1, 25, {2, false}), pokemon::UseConsumableOutcome::NotApplicable);  // empty slot
 
-  EXPECT_EQ(service.useConsumable(1, 26), pokemon::UseConsumableOutcome::Applied);        // Max Ether tops slot 0 off
-  EXPECT_EQ(service.useConsumable(1, 26), pokemon::UseConsumableOutcome::NotApplicable);  // both slots now full
+  EXPECT_EQ(service.useConsumable(1, 27), pokemon::UseConsumableOutcome::Applied);  // Elixir, +10 to both
+  EXPECT_EQ(battleStore.findEntry(1)->pp[0], 15U);
+  EXPECT_EQ(battleStore.findEntry(1)->pp[1], 27U);
+  EXPECT_EQ(service.useConsumable(1, 26, {0, false}), pokemon::UseConsumableOutcome::Applied);  // Max Ether
+  EXPECT_EQ(battleStore.findEntry(1)->pp[0], 30U);
+  EXPECT_EQ(battleStore.findEntry(1)->pp[1], 27U);
+  EXPECT_EQ(service.useConsumable(1, 26, {0, false}), pokemon::UseConsumableOutcome::NotApplicable);  // slot full
+}
+
+// Confusion ends with the battle. A persisted one only counts on the Pokemon
+// fighting right now; anywhere else it is stale, so a Full Heal is not spent on
+// it and reading clears it.
+TEST(PokemonService, PersistedConfusionIsStaleOutsideTheActiveBattler) {
+  Storage.clear();
+  pokemon::PokemonStore store;
+  pokemon::PokemonBattleStore battleStore;
+  pokemon::PokemonIvEvStore ivEvStore;
+  seedStarter(store);
+  pokemon::PokemonHallOfFameStore hallOfFameStore;
+  pokemon::PokemonService service(store, battleStore, ivEvStore, hallOfFameStore, {nullptr, zeroRandom});
+
+  pokemon::BattleRecordEntry entry{};
+  ASSERT_EQ(service.loadBattleEntry(1, entry), pokemon::ServiceStatus::Ok);
+  entry.status = pokemon::Ailment::Confusion;
+  entry.statusTurns = 3;
+  ASSERT_EQ(service.saveBattleEntry(entry), pokemon::ServiceStatus::Ok);
+
+  EXPECT_EQ(service.useConsumable(1, 23), pokemon::UseConsumableOutcome::NotApplicable);  // Full Heal, not in battle
+  EXPECT_EQ(service.useConsumable(1, 23, {-1, true}), pokemon::UseConsumableOutcome::Applied);  // active battler
+  EXPECT_EQ(battleStore.findEntry(1)->status, pokemon::Ailment::None);
+
+  entry = *battleStore.findEntry(1);
+  entry.status = pokemon::Ailment::Confusion;
+  entry.statusTurns = 3;
+  entry.currentHp = 1;
+  ASSERT_EQ(service.saveBattleEntry(entry), pokemon::ServiceStatus::Ok);
+  ASSERT_TRUE(service.creditMinutes(1, 10));
+  EXPECT_EQ(battleStore.findEntry(1)->status, pokemon::Ailment::None);
+  EXPECT_EQ(battleStore.findEntry(1)->statusTurns, 0U);
 }
 
 TEST(PokemonService, AwardBattleXpAppliesWildOrTrainerMultiplierAndCapsAtLevel100) {

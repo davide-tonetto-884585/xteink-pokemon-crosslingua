@@ -4,6 +4,9 @@
 
 - Battle: on the turn after Hyper Beam your Pokémon has to recharge, but the menu still let you use an item (the recharge then happened on your next attack instead) or switch out (skipping the recharge entirely). That turn now only allows FIGHT, which spends it recharging, like the original games.
 - Gym battles: a trainer no longer uses its heal on the turn its Pokémon is recharging from Hyper Beam (it used to lose the following turn as well), and a heal now fully clears a Toxic poisoning instead of leaving part of it behind.
+- Max Potion and Full Restore now restore HP fully. They used to add a flat 255 HP, leaving high-level Pokémon with more than 255 max HP (Snorlax, Chansey, Lapras...) short of full.
+- Ether and Max Ether now restore the PP of one move you choose, as in the original games (after picking the Pokémon, a move list opens). They used to restore every move, the same as Elixir/Max Elixir.
+- Confusion no longer carries over: it ends when the Pokémon is withdrawn or the battle ends. A Pokémon used to stay confused into its next battle, and a Full Heal could be spent "curing" that leftover confusion outside battle.
 
 ## [1.2.3] - 2026-09-25
 

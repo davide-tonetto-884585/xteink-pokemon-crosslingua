@@ -681,6 +681,7 @@ int PokemonActivity::logicalCount() const {
     }
     case Screen::TmReplaceSlot:
     case Screen::PpUpSlot:
+    case Screen::EtherSlot:
       return pokemon::BATTLE_MOVE_SLOTS + 1;
     case Screen::Pc:
       return static_cast<int>(snapshot_.ownedCount - snapshot_.partyCount);
@@ -1141,8 +1142,10 @@ bool PokemonActivity::setupBattlePlayer(const int slot, const bool preserveSideE
                            : pokemon::battleMaxHp(playerStats->hp, battlePlayer_.level, battlePlayer_.iv[hpIndex],
                                                   battlePlayer_.ev[hpIndex]);
   battlePlayer_.currentHp = std::min<uint16_t>(entry.currentHp, battlePlayer_.maxHp);
-  battlePlayer_.status = entry.status;
-  battlePlayer_.statusTurns = entry.statusTurns;
+  // Confusion is volatile - it ends when a Pokemon is withdrawn or the battle
+  // ends, so a persisted one never carries into the next time it fights.
+  battlePlayer_.status = entry.status == pokemon::Ailment::Confusion ? pokemon::Ailment::None : entry.status;
+  battlePlayer_.statusTurns = entry.status == pokemon::Ailment::Confusion ? 0 : entry.statusTurns;
   // Restore the in-progress Toxic escalation too (round 5 audit bug 3.1) -
   // without this, every switch (this function runs at battle start AND on
   // every voluntary/forced Switch) silently reset it to 0, downgrading an
@@ -1404,6 +1407,67 @@ void PokemonActivity::finishItemUseMidBattle(const char* usedLine) {
   }
   if (routeAfterOpponentOnlyTurn(result)) return;
   setScreen(Screen::Battle);
+}
+
+bool PokemonActivity::isActiveBattler(const uint32_t recordId) const {
+  return (screen_ == Screen::ItemTarget || screen_ == Screen::EtherSlot) &&
+         bagCategory_ == BagCategory::BattleMedicine && battlePartySlot_ >= 0 &&
+         battlePartySlot_ < snapshot_.partyCount && recordId == snapshot_.party[battlePartySlot_].recordId;
+}
+
+void PokemonActivity::applyMedicine(const uint32_t recordId, const int moveSlot) {
+  const bool inBattle = bagCategory_ == BagCategory::BattleMedicine;
+  const Screen bagScreen = inBattle ? Screen::BattleBag : Screen::BagMedicine;
+  const Screen retryScreen = moveSlot >= 0 ? Screen::EtherSlot : bagScreen;
+  const pokemon::UseConsumableOutcome outcome = service_.useConsumableAndConsumeItem(
+      recordId, selectedMedicineItemId_, pokemon::ConsumableUse{moveSlot, isActiveBattler(recordId)});
+  if (outcome == pokemon::UseConsumableOutcome::NotApplicable) {
+    showMessage(tr(STR_POKEMON_NOT_APPLICABLE), retryScreen);
+    return;
+  }
+  if (outcome != pokemon::UseConsumableOutcome::Applied) {
+    showMessage(tr(STR_POKEMON_SAVE_ERROR), bagScreen);
+    return;
+  }
+  if (inBattle) {
+    finishBattleMedicine(recordId);
+    return;
+  }
+  if (refreshSnapshot()) setScreen(Screen::Party);
+}
+
+void PokemonActivity::finishBattleMedicine(const uint32_t recordId) {
+  // useConsumable() persists straight to the on-disk BattleRecordEntry via
+  // recordId - it never touches the live in-RAM battlePlayer_ that
+  // stepBattle()/renderBattleHud() actually read. If the target was the
+  // active combatant, pull the entry back and copy it in, the same fields
+  // setupBattlePlayer() seeds at the start of a fight.
+  pokemon::PokemonRecord targetRecord{};
+  const bool isActiveCombatant = battlePartySlot_ >= 0 && battlePartySlot_ < snapshot_.partyCount &&
+                                 recordId == snapshot_.party[battlePartySlot_].recordId;
+  if (isActiveCombatant && service_.readRecord(recordId, targetRecord) == pokemon::ServiceStatus::Ok) {
+    const pokemon::BattleRecordEntry entry = service_.peekBattleMoves(targetRecord);
+    battlePlayer_.currentHp = entry.currentHp;
+    battlePlayer_.status = entry.status;
+    battlePlayer_.statusTurns = entry.statusTurns;
+    // Same reasoning as setupBattlePlayer() - keep toxicCounter in lockstep
+    // with the persisted entry (round 5 audit bug 3.1), including going back
+    // to 0 here if the item just cured the Poison outright.
+    battlePlayer_.toxicCounter = entry.toxicCounter;
+    // Only slots still holding their real move: after Mimic or Transform a
+    // live slot carries a borrowed move whose PP has nothing to do with the
+    // persisted entry's (Mimic's own PP, or the real moveset's), and copying
+    // it over silently refilled or drained it.
+    for (size_t i = 0; i < pokemon::BATTLE_MOVE_SLOTS; ++i) {
+      if (battlePlayer_.moves[i].moveId == entry.moves[i]) battlePlayer_.moves[i].currentPp = entry.pp[i];
+    }
+  }
+  if (!refreshSnapshot()) return;
+  const pokemon::ItemData* item = pokemon::itemData(selectedMedicineItemId_);
+  char usedLine[80];
+  snprintf(usedLine, sizeof(usedLine), tr(STR_POKEMON_USED_ITEM), speciesName(battlePlayer_.speciesId),
+           item == nullptr ? "?" : item->name);
+  finishItemUseMidBattle(usedLine);
 }
 
 // The opponent acted alone this turn (the player used an item, threw a ball,
@@ -1910,49 +1974,14 @@ void PokemonActivity::activate() {
         setScreen(Screen::PpUpSlot);
         return;
       }
-      if (bagCategory_ == BagCategory::BattleMedicine) {
-        const pokemon::UseConsumableOutcome outcome =
-            service_.useConsumableAndConsumeItem(recordId, selectedMedicineItemId_);
-        if (outcome == pokemon::UseConsumableOutcome::NotApplicable) {
-          showMessage(tr(STR_POKEMON_NOT_APPLICABLE), bagScreen);
+      if (bagCategory_ == BagCategory::BattleMedicine || bagCategory_ == BagCategory::Medicine) {
+        if (pokemon::restoresSingleMovePp(selectedMedicineItemId_)) {
+          focusedRecordId_ = recordId;
+          focusedRecord_ = selectedRecord();
+          setScreen(Screen::EtherSlot);
           return;
         }
-        if (outcome != pokemon::UseConsumableOutcome::Applied) {
-          showMessage(tr(STR_POKEMON_SAVE_ERROR), bagScreen);
-          return;
-        }
-        // useConsumable() persists straight to the on-disk BattleRecordEntry
-        // via recordId - it never touches the live in-RAM battlePlayer_ that
-        // stepBattle()/renderBattleHud() actually read. If the target was
-        // the active combatant, pull the entry back and copy it in, the
-        // same fields setupBattlePlayer() seeds at the start of a fight.
-        pokemon::PokemonRecord targetRecord{};
-        const bool isActiveCombatant = battlePartySlot_ >= 0 && battlePartySlot_ < snapshot_.partyCount &&
-                                       recordId == snapshot_.party[battlePartySlot_].recordId;
-        if (isActiveCombatant && service_.readRecord(recordId, targetRecord) == pokemon::ServiceStatus::Ok) {
-          const pokemon::BattleRecordEntry entry = service_.peekBattleMoves(targetRecord);
-          battlePlayer_.currentHp = entry.currentHp;
-          battlePlayer_.status = entry.status;
-          battlePlayer_.statusTurns = entry.statusTurns;
-          // Same reasoning as setupBattlePlayer() - keep toxicCounter in
-          // lockstep with the persisted entry (round 5 audit bug 3.1),
-          // including going back to 0 here if the item just cured the
-          // Poison outright.
-          battlePlayer_.toxicCounter = entry.toxicCounter;
-          // Only slots still holding their real move: after Mimic or
-          // Transform a live slot carries a borrowed move whose PP has nothing
-          // to do with the persisted entry's (Mimic's own PP, or the real
-          // moveset's), and copying it over silently refilled or drained it.
-          for (size_t i = 0; i < pokemon::BATTLE_MOVE_SLOTS; ++i) {
-            if (battlePlayer_.moves[i].moveId == entry.moves[i]) battlePlayer_.moves[i].currentPp = entry.pp[i];
-          }
-        }
-        if (!refreshSnapshot()) return;
-        const pokemon::ItemData* item = pokemon::itemData(selectedMedicineItemId_);
-        char usedLine[80];
-        snprintf(usedLine, sizeof(usedLine), tr(STR_POKEMON_USED_ITEM), speciesName(battlePlayer_.speciesId),
-                 item == nullptr ? "?" : item->name);
-        finishItemUseMidBattle(usedLine);
+        applyMedicine(recordId, -1);
         return;
       }
       if (bagCategory_ == BagCategory::Machine) {
@@ -1974,18 +2003,6 @@ void PokemonActivity::activate() {
           focusedRecord_ = selectedRecord();
           setScreen(Screen::TmReplaceSlot);
         } else if (outcome != pokemon::TeachMoveOutcome::Learned) {
-          showMessage(tr(STR_POKEMON_SAVE_ERROR), bagScreen);
-        } else if (refreshSnapshot()) {
-          setScreen(Screen::Party);
-        }
-        return;
-      }
-      if (bagCategory_ == BagCategory::Medicine) {
-        const pokemon::UseConsumableOutcome outcome =
-            service_.useConsumableAndConsumeItem(recordId, selectedMedicineItemId_);
-        if (outcome == pokemon::UseConsumableOutcome::NotApplicable) {
-          showMessage(tr(STR_POKEMON_NOT_APPLICABLE), bagScreen);
-        } else if (outcome != pokemon::UseConsumableOutcome::Applied) {
           showMessage(tr(STR_POKEMON_SAVE_ERROR), bagScreen);
         } else if (refreshSnapshot()) {
           setScreen(Screen::Party);
@@ -2019,6 +2036,13 @@ void PokemonActivity::activate() {
       setScreen(Screen::Party);
       return;
     }
+    case Screen::EtherSlot:
+      if (selected_ >= static_cast<int>(pokemon::BATTLE_MOVE_SLOTS)) {
+        setScreen(bagCategory_ == BagCategory::BattleMedicine ? Screen::BattleBag : Screen::BagMedicine);
+        return;
+      }
+      applyMedicine(focusedRecordId_, selected_);
+      return;
     case Screen::PpUpSlot: {
       if (selected_ >= static_cast<int>(pokemon::BATTLE_MOVE_SLOTS)) {
         setScreen(Screen::BagMedicine);
@@ -2505,6 +2529,9 @@ void PokemonActivity::goBack() {
     case Screen::PpUpSlot:
       setScreen(Screen::BagMedicine);
       return;
+    case Screen::EtherSlot:
+      setScreen(bagCategory_ == BagCategory::BattleMedicine ? Screen::BattleBag : Screen::BagMedicine);
+      return;
     case Screen::PcOrder:
       setScreen(Screen::Pc);
       return;
@@ -2872,7 +2899,8 @@ void PokemonActivity::buildRows() {
   // focusedRecord_ is constant across the whole pass, so peek its moveset once
   // here instead of once per visible row in each of the four moveset screens.
   const bool focusedMovesetScreen = screen_ == Screen::Moveset || screen_ == Screen::MovesetPick ||
-                                    screen_ == Screen::TmReplaceSlot || screen_ == Screen::PpUpSlot;
+                                    screen_ == Screen::TmReplaceSlot || screen_ == Screen::PpUpSlot ||
+                                    screen_ == Screen::EtherSlot;
   const pokemon::BattleRecordEntry focusedEntry = focusedMovesetScreen && focusedRecord_.recordId != 0
                                                       ? service_.peekBattleMoves(focusedRecord_)
                                                       : pokemon::BattleRecordEntry{};
@@ -3018,6 +3046,19 @@ void PokemonActivity::buildRows() {
         snprintf(value, sizeof(value), "PP %u/%u", entry.pp[index],
                  move == nullptr ? 0 : pokemon::maxPpFor(move->pp, entry.ppUp[index]));
         row(local, move == nullptr ? "-" : move->name, value);
+        break;
+      }
+      case Screen::EtherSlot: {
+        if (index >= static_cast<int>(pokemon::BATTLE_MOVE_SLOTS)) {
+          row(local, tr(STR_POKEMON_CANCEL));
+          break;
+        }
+        const pokemon::BattleRecordEntry& entry = focusedEntry;
+        const pokemon::MoveData* move = pokemon::moveData(entry.moves[index]);
+        char value[16];
+        snprintf(value, sizeof(value), "PP %u/%u", entry.pp[index],
+                 move == nullptr ? 0 : pokemon::maxPpFor(move->pp, entry.ppUp[index]));
+        row(local, move == nullptr ? "-" : move->name, move == nullptr ? "" : value);
         break;
       }
       case Screen::PpUpSlot: {
@@ -4669,7 +4710,9 @@ void PokemonActivity::renderPartyRowHealth(const int rowY, const pokemon::Pokemo
   snprintf(hpText, sizeof(hpText), "%u/%u", entry.currentHp, maxHp);
   renderer.drawText(UI_10_FONT_ID, barX + barW + 8, hpTextY, hpText);
 
-  if (entry.status != pokemon::Ailment::None) {
+  // A persisted Confusion is stale except on the Pokemon fighting right now.
+  const bool staleConfusion = entry.status == pokemon::Ailment::Confusion && !isActiveBattler(record.recordId);
+  if (entry.status != pokemon::Ailment::None && !staleConfusion) {
     const char* status = statusAbbrev(entry.status);
     renderer.drawText(UI_10_FONT_ID, textRight - renderer.getTextWidth(UI_10_FONT_ID, status, EpdFontFamily::BOLD),
                       statusY, status, true, EpdFontFamily::BOLD);
@@ -4773,7 +4816,7 @@ void PokemonActivity::renderHeaderAndHints() {
   else if (screen_ == Screen::Summary || screen_ == Screen::Actions)
     title = tr(STR_POKEMON_SUMMARY);
   else if (screen_ == Screen::Moveset || screen_ == Screen::MovesetPick || screen_ == Screen::TmReplaceSlot ||
-           screen_ == Screen::PpUpSlot)
+           screen_ == Screen::PpUpSlot || screen_ == Screen::EtherSlot)
     title = tr(STR_POKEMON_MOVES);
   else if (screen_ == Screen::BattleBag)
     title = tr(STR_POKEMON_BAG);
