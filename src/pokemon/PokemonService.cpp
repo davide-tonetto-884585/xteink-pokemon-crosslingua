@@ -308,7 +308,8 @@ ServiceStatus PokemonService::readPcPage(const PcOrder order, const size_t offse
   return store_.readPcPage(order, offset, output, count) ? ServiceStatus::Ok : ServiceStatus::StorageError;
 }
 
-ServiceStatus PokemonService::resolveEncounter(const EncounterChoice choice, uint32_t& caughtRecordId) {
+ServiceStatus PokemonService::resolveEncounter(const EncounterChoice choice, uint32_t& caughtRecordId,
+                                              const std::array<uint8_t, STAT_COUNT>* battleIvs) {
   caughtRecordId = 0;
   PokemonState state{};
   const ServiceStatus stateStatus = loadReadyState(state);
@@ -349,8 +350,19 @@ ServiceStatus PokemonService::resolveEncounter(const EncounterChoice choice, uin
     if (movesetStore_.findEntry(caughtRecordId) != nullptr) movesetStore_.removeEntry(caughtRecordId);
     if (ivEvStore_.findEntry(caughtRecordId) != nullptr) ivEvStore_.removeEntry(caughtRecordId);
     clearPendingIvEvRoll(caughtRecordId);
-    // Same reasoning as createStarter(): roll at catch time so the new Pokemon never shows IV-0 stats.
-    ensureIvEv(caughtRecordId);
+    // Same reasoning as createStarter(): give it IVs at catch time so the new Pokemon never shows IV-0
+    // stats - the ones it just fought with, when known.
+    if (battleIvs != nullptr) {
+      IvEvEntry caughtIvEv{};
+      caughtIvEv.recordId = caughtRecordId;
+      caughtIvEv.iv = *battleIvs;
+      if (!ivEvStore_.upsertEntry(caughtIvEv)) {
+        LOG_ERR("PokemonService", "Failed to persist caught IVs for record %u", caughtRecordId);
+        cachePendingIvEvRoll(caughtIvEv);  // ensureIvEv() retries with these, not a new roll
+      }
+    } else {
+      ensureIvEv(caughtRecordId);
+    }
   }
   return ServiceStatus::Ok;
 }
@@ -1556,6 +1568,17 @@ bool PokemonService::creditMinutes(const uint16_t minutes, const uint8_t bookPro
   if (!store_.commit(state, mutation)) {
     LOG_ERR("PokemonService", "Failed to commit credited reading");
     return false;
+  }
+  // Same rule as Rare Candy and battle-win level-ups: the max-HP gain of a
+  // level-up is added to current HP too.
+  if (result.currentLevel > result.previousLevel) {
+    if (const BaseStats* stats = baseStatsFor(leader.speciesId); stats != nullptr) {
+      const IvEvEntry ivEv = peekIvEv(leader.recordId);
+      constexpr size_t hpIndex = static_cast<size_t>(StatIndex::Hp);
+      raiseCurrentHpByMaxHpGain(leader.recordId,
+                                battleMaxHp(stats->hp, result.previousLevel, ivEv.iv[hpIndex], ivEv.ev[hpIndex]),
+                                battleMaxHp(stats->hp, result.currentLevel, ivEv.iv[hpIndex], ivEv.ev[hpIndex]));
+    }
   }
   healPartyOnRead(state, minutes, previousMinuteRemainder);
   return true;

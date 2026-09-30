@@ -1203,10 +1203,8 @@ void PokemonActivity::setupBattleOpponent(const uint16_t speciesId, const uint8_
   battleOpponent_.gender = gender;
   battleOpponent_.isShiny = isShiny;
   if (fixedMoves.empty()) {
-    // Wild encounter: a fresh, unpersisted IV roll for this fight - if the
-    // catch succeeds, the new record's IVs are rolled independently via
-    // service_.ensureIvEv() rather than reusing this exact roll (a
-    // deliberate simplification - see docs/development/pokemon-iv-ev-plan.md).
+    // Wild encounter: a fresh IV roll for this fight. A successful catch
+    // keeps this exact roll (passed to resolveEncounter()).
     battleOpponent_.iv = service_.rollWildIv(isShiny);
   } else {
     // Gym/Elite Four/Champion trainer: fixed "perfect" IVs, no EVs - matches
@@ -2404,7 +2402,8 @@ void PokemonActivity::activate() {
       }
       const uint16_t caughtSpecies = battleOpponent_.realSpeciesId();
       uint32_t caughtRecordId = 0;
-      const pokemon::ServiceStatus caughtStatus = service_.resolveEncounter(pokemon::EncounterChoice::Catch, caughtRecordId);
+      const pokemon::ServiceStatus caughtStatus =
+          service_.resolveEncounter(pokemon::EncounterChoice::Catch, caughtRecordId, &battleOpponent_.iv);
       if (caughtStatus == pokemon::ServiceStatus::BoxFull) {
         showMessage(tr(STR_POKEMON_BOX_FULL), Screen::Menu);
         return;

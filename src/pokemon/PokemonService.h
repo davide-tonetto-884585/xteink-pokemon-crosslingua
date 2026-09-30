@@ -131,7 +131,10 @@ class PokemonService {
   ServiceStatus markSpeciesSeen(uint16_t speciesId);
   ServiceStatus loadDashboardSnapshot(PokemonDashboardSnapshot& output);
   ServiceStatus readPcPage(PcOrder order, size_t offset, std::span<PokemonRecord> output, size_t& count);
-  ServiceStatus resolveEncounter(EncounterChoice choice, uint32_t& caughtRecordId);
+  // `battleIvs`, when given, are the IVs the wild Pokemon fought with; a catch keeps
+  // them instead of rolling new ones, so its stats don't change the moment it's caught.
+  ServiceStatus resolveEncounter(EncounterChoice choice, uint32_t& caughtRecordId,
+                                 const std::array<uint8_t, STAT_COUNT>* battleIvs = nullptr);
   ServiceStatus acknowledgeItem();
   ServiceStatus resolveEvolution(EvolutionChoice choice);
   // Resolves the front MoveLearn event (PendingEventKind::MoveLearn):

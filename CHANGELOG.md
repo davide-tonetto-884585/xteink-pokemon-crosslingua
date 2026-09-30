@@ -1,3 +1,10 @@
+## [Unreleased]
+
+### Fixed
+
+- Levelling up while reading now adds the max-HP gain to current HP, the same as Rare Candy and battle wins already did.
+- A caught Pokémon now keeps the hidden stats (IVs) it had during the battle, instead of getting new ones the moment it's caught - its stats no longer change right after catching it.
+
 ## [1.2.4] - 2026-09-30
 
 ### Fixed

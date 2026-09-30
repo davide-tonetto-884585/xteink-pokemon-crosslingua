@@ -927,6 +927,33 @@ TEST(PokemonService, NewStarterAndNewCatchHaveTheirIvsRolledImmediately) {
   EXPECT_NE(ivEvStore.findEntry(caughtRecordId), nullptr);
 }
 
+// A caught Pokemon keeps the IVs it fought with instead of getting a fresh roll.
+TEST(PokemonService, CatchKeepsTheIvsTheWildPokemonFoughtWith) {
+  Storage.clear();
+  pokemon::PokemonStore store;
+  pokemon::PokemonBattleStore battleStore;
+  pokemon::PokemonIvEvStore ivEvStore;
+  seedStarter(store);
+  pokemon::PokemonHallOfFameStore hallOfFameStore;
+  pokemon::PokemonService service(store, battleStore, ivEvStore, hallOfFameStore, {nullptr, zeroRandom});
+  pokemon::PokemonState state{};
+  ASSERT_TRUE(store.loadState(state));
+  state.pendingEvents[0].kind = pokemon::PendingEventKind::Encounter;
+  state.pendingEvents[0].speciesId = 133;
+  state.pendingEvents[0].level = 12;
+  state.pendingEvents[0].gender = pokemon::Gender::Female;
+  ASSERT_TRUE(store.commit(state));
+
+  const std::array<uint8_t, pokemon::STAT_COUNT> foughtWith{13, 7, 15, 2, 9};  // zeroRandom would roll all 0
+  uint32_t caughtRecordId = 0;
+  ASSERT_EQ(service.resolveEncounter(pokemon::EncounterChoice::Catch, caughtRecordId, &foughtWith),
+            pokemon::ServiceStatus::Ok);
+  const pokemon::IvEvEntry* stored = ivEvStore.findEntry(caughtRecordId);
+  ASSERT_NE(stored, nullptr);
+  EXPECT_EQ(stored->iv, foughtWith);
+  EXPECT_EQ(stored->ev, (std::array<uint8_t, pokemon::STAT_COUNT>{}));
+}
+
 TEST(PokemonService, ResolvesEncounterCatchThenAllowsNickname) {
   Storage.clear();
   pokemon::PokemonStore store;
@@ -2679,6 +2706,39 @@ TEST(PokemonService, AwardBattleXpAccumulatesEvYieldAndSaturatesAt255) {
 
 // Real Gen 1: the max-HP gain of a level-up is added to current HP too, so a
 // Pokemon at full health stays at full health and a fainted one stays fainted.
+// Reading level-ups follow the same rule as Rare Candy and battle wins.
+TEST(PokemonService, ReadingLevelUpAddsTheMaxHpGainToCurrentHp) {
+  Storage.clear();
+  pokemon::PokemonStore store;
+  pokemon::PokemonBattleStore battleStore;
+  pokemon::PokemonIvEvStore ivEvStore;
+  seedStarter(store);  // Pikachu, level 5
+  pokemon::PokemonHallOfFameStore hallOfFameStore;
+  pokemon::PokemonService service(store, battleStore, ivEvStore, hallOfFameStore, {nullptr, zeroRandom});
+
+  pokemon::BattleRecordEntry entry{};
+  ASSERT_EQ(service.loadBattleEntry(1, entry), pokemon::ServiceStatus::Ok);
+  entry.currentHp = 3;
+  ASSERT_EQ(service.saveBattleEntry(entry), pokemon::ServiceStatus::Ok);
+  pokemon::PokemonRecord leader{};
+  ASSERT_TRUE(store.readRecord(1, leader));
+  leader.totalXp = pokemon::xpRequired(6) - 1U;
+  pokemon::PokemonState state{};
+  ASSERT_TRUE(store.loadState(state));
+  ASSERT_TRUE(store.commit(state, pokemon::RecordMutation{1, leader, pokemon::RecordMutationKind::Replace}));
+
+  const pokemon::BaseStats* stats = pokemon::baseStatsFor(25);
+  const pokemon::IvEvEntry ivEv = service.ensureIvEv(1);
+  constexpr size_t hp = static_cast<size_t>(pokemon::StatIndex::Hp);
+  const uint16_t gain = static_cast<uint16_t>(pokemon::battleMaxHp(stats->hp, 6, ivEv.iv[hp], ivEv.ev[hp]) -
+                                              pokemon::battleMaxHp(stats->hp, 5, ivEv.iv[hp], ivEv.ev[hp]));
+  ASSERT_GT(gain, 0U);
+  ASSERT_TRUE(service.creditMinutes(1, 10));  // one minute: level 6, plus the usual 1 HP of reading heal
+  ASSERT_TRUE(store.readRecord(1, leader));
+  ASSERT_EQ(pokemon::levelForXp(leader.totalXp), 6U);
+  EXPECT_EQ(battleStore.findEntry(1)->currentHp, 3U + gain + 1U);
+}
+
 TEST(PokemonService, LevelUpFromRareCandyAndBattleXpAddsTheMaxHpGainToCurrentHp) {
   Storage.clear();
   pokemon::PokemonStore store;
