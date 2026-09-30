@@ -15,14 +15,14 @@ by cost and by whether they need a game-design decision; pick from the top.
    rendered) exists in `lib/Pokemon/PokemonTracker.*` but is wired to nothing,
    while `docs/development/pokemon-mechanics.md` §2 describes it as active.
    Either wire it in or correct the doc.
-2. **Reading level-ups don't add the max-HP gain to current HP.** Rare Candy
+2. ~~**Reading level-ups don't add the max-HP gain to current HP.**~~ **Done** (after v1.2.4). Rare Candy
    and battle-win level-ups do (`PokemonService::raiseCurrentHpByMaxHpGain`,
    v1.2.3); `creditMinutes()` doesn't. Make the three paths consistent.
-3. **A caught Pokémon's IVs are re-rolled.** The wild combatant gets an IV
+3. ~~**A caught Pokémon's IVs are re-rolled.**~~ **Done** (after v1.2.4). The wild combatant gets an IV
    roll for the fight (`setupBattleOpponent`), but the new record gets a fresh
    one at catch time (`ensureIvEv` in `resolveEncounter`), so its stats change
    the moment it's caught. Carry the battle roll over to the record.
-4. **Dev tooling is out of date.**
+4. ~~**Dev tooling is out of date.**~~ **Done** (after v1.2.4).
    - `scripts/dev/edit_pokemon_save.py` doesn't understand battle store v3
      (21-byte entries with `toxicCounter`) or the moveset store.
    - The Pokémon simulator smoke scripts in `src/simulator/SimulatorSmokeTest.cpp`
