@@ -7,7 +7,7 @@ set up scenarios (queue a wild encounter, wipe HP/PP/status back to full,
 clear gym progress, hand a Pokemon some items) without waiting on real
 gameplay/RNG. See docs/file-formats.md for the on-disk layout this assumes;
 this tool only understands the CURRENT save format used by this branch
-(main save version 10, 341-byte state; battle-store version 2, 20-byte
+(main save version 10, 341-byte state; battle-store version 3, 21-byte
 entries) and refuses to touch anything else rather than risk corrupting an
 unfamiliar layout.
 
@@ -101,14 +101,31 @@ OFF_VITAMIN_COUNTS = 205  # 5 x u8 - ids 91-95, tracked outside bagCounts, same 
 
 # The battle-store side file (pokemon-battle-{a,b}.bin) - see
 # lib/Pokemon/PokemonBattleStoreCodec.h. Version 2 entries add a per-slot PP
-# Up counter after the version-1 layout.
+# Up counter after the version-1 layout; version 3 adds the Toxic counter.
 BATTLE_MAGIC = b"PKBT"
 BATTLE_HEADER_BYTES = 10  # magic(4) + version(1) + entryCount(1) + sequence(4)
 BATTLE_ENTRY_BYTES_V1 = 16
-BATTLE_ENTRY_BYTES = 20  # version 2: adds ppUp[4]
+BATTLE_ENTRY_BYTES_V2 = 20  # adds ppUp[4]
+BATTLE_ENTRY_BYTES = 21  # version 3: adds toxicCounter
 BATTLE_MOVE_SLOTS = 4
 BATTLE_STORE_VERSION_V1 = 1
-BATTLE_STORE_VERSION = 2
+BATTLE_STORE_VERSION_V2 = 2
+BATTLE_STORE_VERSION = 3
+BATTLE_ENTRY_BYTES_BY_VERSION = {
+    BATTLE_STORE_VERSION_V1: BATTLE_ENTRY_BYTES_V1,
+    BATTLE_STORE_VERSION_V2: BATTLE_ENTRY_BYTES_V2,
+    BATTLE_STORE_VERSION: BATTLE_ENTRY_BYTES,
+}
+
+# The moveset side file (pokemon-moves-{a,b}.bin) - see
+# lib/Pokemon/PokemonMovesetStoreCodec.h. Holds a Pokemon's customised moves
+# and PP Ups; the firmware prefers it over the level-default moveset whenever
+# the Pokemon has no battle-store entry.
+MOVESET_MAGIC = b"PKMV"
+MOVESET_HEADER_BYTES = 11  # magic(4) + version(1) + entryCount(u16) + sequence(4)
+MOVESET_ENTRY_BYTES = 12  # recordId(4) + moves[4] + ppUp[4]
+MOVESET_STORE_VERSION = 1
+MOVESET_STORE_NAMES = ("pokemon-moves-a.bin", "pokemon-moves-b.bin")
 
 PENDING_KIND_NONE = 0
 PENDING_KIND_ENCOUNTER = 1
@@ -460,6 +477,7 @@ class BattleEntry:
     status: int
     status_turns: int
     ppup: list[int]  # 4, 0-3 each
+    toxic_counter: int = 0
 
 
 def read_battle_store(save_dir: Path) -> tuple[list[BattleEntry], int]:
@@ -479,10 +497,10 @@ def read_battle_store(save_dir: Path) -> tuple[list[BattleEntry], int]:
             continue
         version = data[4]
         count = data[5]
-        if version not in (BATTLE_STORE_VERSION_V1, BATTLE_STORE_VERSION):
+        if version not in BATTLE_ENTRY_BYTES_BY_VERSION:
             continue
         sequence, = struct.unpack_from("<I", data, 6)
-        entry_bytes = BATTLE_ENTRY_BYTES_V1 if version == BATTLE_STORE_VERSION_V1 else BATTLE_ENTRY_BYTES
+        entry_bytes = BATTLE_ENTRY_BYTES_BY_VERSION[version]
         payload_size = BATTLE_HEADER_BYTES + count * entry_bytes
         if len(data) != payload_size + 4 or sequence == 0:
             continue
@@ -498,8 +516,9 @@ def read_battle_store(save_dir: Path) -> tuple[list[BattleEntry], int]:
             current_hp, = struct.unpack_from("<H", data, offset + 12)
             status = data[offset + 14]
             status_turns = data[offset + 15]
-            ppup = list(data[offset + 16 : offset + 20]) if version == BATTLE_STORE_VERSION else [0, 0, 0, 0]
-            entries.append(BattleEntry(record_id, moves, pp, current_hp, status, status_turns, ppup))
+            ppup = list(data[offset + 16 : offset + 20]) if version >= BATTLE_STORE_VERSION_V2 else [0, 0, 0, 0]
+            toxic = data[offset + 20] if version >= BATTLE_STORE_VERSION else 0
+            entries.append(BattleEntry(record_id, moves, pp, current_hp, status, status_turns, ppup, toxic))
             offset += entry_bytes
         if best is None or sequence > best[0]:
             best = (sequence, entries)
@@ -524,12 +543,75 @@ def write_battle_store(save_dir: Path, entries: list[BattleEntry], sequence: int
         body.append(e.status)
         body.append(e.status_turns)
         body += bytes(e.ppup)
+        body.append(e.toxic_counter)
     crc = zlib.crc32(bytes(body)) & 0xFFFFFFFF
     body += struct.pack("<I", crc)
     if dry_run:
         return
     save_dir.mkdir(parents=True, exist_ok=True)
     for name in BATTLE_STORE_NAMES_CURRENT:
+        path = save_dir / name
+        if backup and path.exists():
+            bak = path.with_suffix(path.suffix + ".bak")
+            if not bak.exists():
+                bak.write_bytes(path.read_bytes())
+        path.write_bytes(bytes(body))
+        print(f"wrote {path}")
+
+
+@dataclass
+class MovesetEntry:
+    record_id: int
+    moves: list[int]  # 4, 0 = empty slot
+    ppup: list[int]  # 4, 0-3 each
+
+
+def read_moveset_store(save_dir: Path) -> tuple[list[MovesetEntry], int]:
+    """Same contract as read_battle_store(), for pokemon-moves-{a,b}.bin."""
+    best: Optional[tuple[int, list[MovesetEntry]]] = None
+    for name in MOVESET_STORE_NAMES:
+        path = save_dir / name
+        if not path.exists():
+            continue
+        data = path.read_bytes()
+        if len(data) < MOVESET_HEADER_BYTES + 4 or data[0:4] != MOVESET_MAGIC or data[4] != MOVESET_STORE_VERSION:
+            continue
+        count, = struct.unpack_from("<H", data, 5)
+        sequence, = struct.unpack_from("<I", data, 7)
+        payload_size = MOVESET_HEADER_BYTES + count * MOVESET_ENTRY_BYTES
+        if len(data) != payload_size + 4 or sequence == 0:
+            continue
+        crc_expected, = struct.unpack_from("<I", data, payload_size)
+        if (zlib.crc32(data[:payload_size]) & 0xFFFFFFFF) != crc_expected:
+            continue
+        entries = []
+        for i in range(count):
+            offset = MOVESET_HEADER_BYTES + i * MOVESET_ENTRY_BYTES
+            record_id, = struct.unpack_from("<I", data, offset)
+            entries.append(MovesetEntry(record_id, list(data[offset + 4 : offset + 8]), list(data[offset + 8 : offset + 12])))
+        if best is None or sequence > best[0]:
+            best = (sequence, entries)
+    if best is None:
+        return [], 1
+    sequence, entries = best
+    return entries, (1 if sequence == 0xFFFFFFFF else sequence + 1)
+
+
+def write_moveset_store(save_dir: Path, entries: list[MovesetEntry], sequence: int, backup: bool, dry_run: bool) -> None:
+    entries = sorted(entries, key=lambda e: e.record_id)
+    body = bytearray(MOVESET_MAGIC)
+    body.append(MOVESET_STORE_VERSION)
+    body += struct.pack("<H", len(entries))
+    body += struct.pack("<I", sequence)
+    for e in entries:
+        body += struct.pack("<I", e.record_id)
+        body += bytes(e.moves)
+        body += bytes(e.ppup)
+    body += struct.pack("<I", zlib.crc32(bytes(body)) & 0xFFFFFFFF)
+    if dry_run:
+        return
+    save_dir.mkdir(parents=True, exist_ok=True)
+    for name in MOVESET_STORE_NAMES:
         path = save_dir / name
         if backup and path.exists():
             bak = path.with_suffix(path.suffix + ".bak")
@@ -695,7 +777,17 @@ def cmd_dump(args: argparse.Namespace) -> None:
             name = move.name if move else f"?{move_id}"
             suffix = f" (x{ppup})" if ppup else ""
             move_descs.append(f"{name} {pp}{suffix}")
-        print(f"  #{entry.record_id}: HP {entry.current_hp}, status={entry.status}, moves = {move_descs}")
+        toxic = f", toxic={entry.toxic_counter}" if entry.toxic_counter else ""
+        print(f"  #{entry.record_id}: HP {entry.current_hp}, status={entry.status}{toxic}, moves = {move_descs}")
+
+    moveset_entries, _ = read_moveset_store(args.save_dir)
+    print("\nsaved movesets (customised moves/PP Ups, kept even when the battle entry is gone):")
+    if not moveset_entries:
+        print("  none")
+    for entry in moveset_entries:
+        names = [f"{move_map[m].name if m in move_map else f'?{m}'}" + (f" (x{u})" if u else "") if m else "-"
+                 for m, u in zip(entry.moves, entry.ppup)]
+        print(f"  #{entry.record_id}: {names}")
 
 
 def cmd_reset_battle_store(args: argparse.Namespace) -> None:
@@ -1064,6 +1156,12 @@ def cmd_set_moves(args: argparse.Namespace) -> None:
     move_names = [move_map[m].name if m else "-" for m in moves]
     print(f"record #{args.record_id} (species {species_id}, level {level}): moves = {move_names}")
     write_battle_store(args.save_dir, entries, next_sequence, backup=not args.no_backup, dry_run=args.dry_run)
+    # Keep the moveset store in step, as the firmware does (PokemonService::persistBattleEntry()) -
+    # otherwise an older saved moveset would come back as soon as the battle entry is evicted.
+    moveset_entries, moveset_sequence = read_moveset_store(args.save_dir)
+    moveset_entries = [e for e in moveset_entries if e.record_id != args.record_id]
+    moveset_entries.append(MovesetEntry(args.record_id, list(moves), [0, 0, 0, 0]))
+    write_moveset_store(args.save_dir, moveset_entries, moveset_sequence, backup=not args.no_backup, dry_run=args.dry_run)
 
 
 GENDER_NAMES_REVERSE = {"male": GENDER_MALE, "female": GENDER_FEMALE, "genderless": GENDER_GENDERLESS}

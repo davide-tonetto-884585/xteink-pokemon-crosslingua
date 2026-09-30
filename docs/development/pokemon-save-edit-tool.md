@@ -25,7 +25,7 @@ By default the tool looks for `fs_/.crosspoint/pokemon-{a,b}.bin`. Use `--save-d
 ## Commands
 
 ### `dump`
-Prints the full party, records, gym progress (badges/gym-battle history), bag item counts, and pending events. Use it to check the current state before making a change, or to verify it afterward.
+Prints the full party, records, gym progress (badges/gym-battle history), bag item counts, pending events, battle entries (battle store v1-v3, including the Toxic counter) and saved movesets (`pokemon-moves-{a,b}.bin`). Use it to check the current state before making a change, or to verify it afterward.
 
 ```sh
 python3 scripts/dev/edit_pokemon_save.py dump
@@ -87,6 +87,15 @@ python3 scripts/dev/edit_pokemon_save.py add-party-member --species pikachu --le
 - `--nickname` — default: none
 
 Fails if the party already has 6 members. Also marks the species as seen and caught in the Pokédex, since a Pokémon you own must be both. HP/PP for a newly-added member come out full the moment it's used (no battle-store entry exists yet), unless you also run `reset-battle-store` to be certain a stale entry for a reused record id isn't picked up first.
+
+### `set-moves`
+Overwrites one Pokémon's moveset (full PP, no PP Ups). Writes both the battle store (keeping every other Pokémon's entry) and the saved-moveset store, the same pair the firmware keeps in step, so the new moves survive the battle entry being evicted later.
+
+```sh
+python3 scripts/dev/edit_pokemon_save.py set-moves --record-id 1 --moves "tackle,swift"
+```
+
+- `--moves` — 1-4 comma-separated move ids or names; omit it to use the species' level-default moveset
 
 ## More examples via `--help`
 
