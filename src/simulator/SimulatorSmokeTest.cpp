@@ -959,17 +959,12 @@ class SimulatorSmokeTest {
     addTap(MappedInputManager::Button::Back);
     inputScript.push_back(render("Pokemon Menu Restored", 4));
 
-    // KNOWN ISSUE (found 2026-09-22, pre-existing, unrelated to the CrossInk v1.6.0 sync -
-    // HomeActivity.cpp/ActivityManager.cpp's relevant code is byte-identical to upstream v1.5.1
-    // here): this second Back exits PokemonActivity entirely back to Home, so re-entering
-    // Pokemon below means genuinely navigating Home's own menu, not PokemonActivity's internal
-    // Screen::Menu. A single Down was enough once, but this fork's own Lyra Carousel Home theme
-    // (unrelated to CrossInk) makes navigation from the recent-books carousel row state-dependent
-    // in a way not yet fully understood - reproduced landing on File Browser, an EPUB reader, and
-    // RecentBooksActivity across different attempts at a fix, none reliable across runs. Needs
-    // dedicated debugging of HomeActivity's carousel-vs-menu input handling, not a guessed tap
-    // sequence here. Left as the original single Down for now - known to fail intermittently.
-    addTap(MappedInputManager::Button::Down);
+    inputScript.push_back(assertActivity("Pokemon"));
+
+    // The Pokemon menu is a 2-column button grid (Party | Pokedex / PC Box |
+    // PC order / Bag | Gym / Badges | Settings), not a list: Right moves to
+    // the next column, Down to the next row. Pokedex is right of Party.
+    addTap(MappedInputManager::Button::Right);
     addTap(MappedInputManager::Button::Confirm);
     inputScript.push_back(render("Pokemon Pokedex", 4));
     // Right/Left step one row at a time; Down/Up jump a full page (Stage 10 -
@@ -993,7 +988,8 @@ class SimulatorSmokeTest {
     inputScript.push_back(assertActivity("Pokemon"));
 
     addTap(MappedInputManager::Button::Back);
-    for (int i = 0; i < 2; ++i) addTap(MappedInputManager::Button::Down);
+    // Back on the menu with Party selected; PC Box is the row below it.
+    addTap(MappedInputManager::Button::Down);
     addTap(MappedInputManager::Button::Confirm);
     inputScript.push_back(render("Pokemon Empty PC", 4));
     inputScript.push_back(assertActivity("Pokemon"));
@@ -1061,13 +1057,27 @@ class SimulatorSmokeTest {
     // the message body itself (wasScreenTapped() in loop()), so use a plain
     // center-of-screen tap for those instead of tapBack().
     const int centerY = renderer.getScreenHeight() / 2;
+    // The Pokemon menu and the Bag category picker are 2-column button grids
+    // (PokemonActivity::buttonGridCellRect(): 8px margin/gap, 64px rows,
+    // starting at the same top as a list), not list rows.
+    const auto tapGrid = [&](const int index) {
+      constexpr int columns = 2;
+      constexpr int margin = 8;
+      constexpr int gap = 8;
+      constexpr int rowHeight = 64;
+      const int buttonWidth = (renderer.getScreenWidth() - 2 * margin - gap * (columns - 1)) / columns;
+      const int x = margin + (index % columns) * (buttonWidth + gap) + buttonWidth / 2;
+      const int y = listTop + (index / columns) * rowHeight + (rowHeight - 8) / 2;
+      inputScript.push_back(touchDown(x, y));
+      inputScript.push_back(touchRelease(x, y));
+    };
     const auto tapCenter = [&] {
       inputScript.push_back(touchDown(centerX, centerY));
       inputScript.push_back(touchRelease(centerX, centerY));
     };
 
-    // Menu row 0 = Party.
-    tapRow(0, 64);
+    // Menu cell 0 = Party.
+    tapGrid(0);
     inputScript.push_back(render("Pokemon Party via touch", 4));
     inputScript.push_back(assertActivity("Pokemon"));
 
@@ -1096,8 +1106,8 @@ class SimulatorSmokeTest {
     inputScript.push_back(render("Pokemon Menu Restored via touch", 4));
     inputScript.push_back(assertActivity("Pokemon"));
 
-    // Menu row 1 = Pokedex.
-    tapRow(1, 64);
+    // Menu cell 1 = Pokedex.
+    tapGrid(1);
     inputScript.push_back(render("Pokemon Pokedex via touch", 4));
 
     // Row 3 - matches the button script's "3x Down from the top" entry, a
@@ -1111,9 +1121,9 @@ class SimulatorSmokeTest {
     inputScript.push_back(render("Pokemon Menu Restored 2 via touch", 4));
     inputScript.push_back(assertActivity("Pokemon"));
 
-    // Menu row 2 = PC Box (empty on a fresh save - still a real fui::list()
+    // Menu cell 2 = PC Box (empty on a fresh save - still a real fui::list()
     // screen showing the empty-state message, per buildUi()).
-    tapRow(2, 64);
+    tapGrid(2);
     inputScript.push_back(render("Pokemon Empty PC via touch", 4));
     inputScript.push_back(assertActivity("Pokemon"));
 
@@ -1121,19 +1131,19 @@ class SimulatorSmokeTest {
     inputScript.push_back(render("Pokemon Menu Restored 3 via touch", 4));
     inputScript.push_back(assertActivity("Pokemon"));
 
-    // Menu row 4 = Bag (a category-select screen: Evolution/Medicine/
-    // Balls/Machine, in that row order - see activate()'s Screen::Bag case).
-    tapRow(4, 64);
+    // Menu cell 4 = Bag (a 2x2 category grid: Evolution/Medicine/Balls/
+    // Machine, in that order - see activate()'s Screen::Bag case).
+    tapGrid(4);
     inputScript.push_back(render("Pokemon Bag via touch", 4));
 
-    // Row 0 = Evolution stones (empty on a fresh save).
-    tapRow(0, 64);
+    // Cell 0 = Evolution stones (empty on a fresh save).
+    tapGrid(0);
     inputScript.push_back(render("Pokemon Bag Evolution via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Bag Restored via touch", 4));
 
-    // Row 1 = Medicine (empty on a fresh save).
-    tapRow(1, 64);
+    // Cell 1 = Medicine (the starter's gift Potion).
+    tapGrid(1);
     inputScript.push_back(render("Pokemon Bag Medicine via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Bag Restored 2 via touch", 4));
@@ -1143,7 +1153,7 @@ class SimulatorSmokeTest {
     // (Screen::Message) instead of doing anything, which doubles as
     // coverage for the Message tap-to-dismiss path added alongside the
     // Battle grid touch support.
-    tapRow(2, 64);
+    tapGrid(2);
     inputScript.push_back(render("Pokemon Bag Balls via touch", 4));
     tapRow(0, 64);
     inputScript.push_back(render("Pokemon Bag Balls Info via touch", 4));
@@ -1152,8 +1162,8 @@ class SimulatorSmokeTest {
     tapBack();
     inputScript.push_back(render("Pokemon Bag Restored 3 via touch", 4));
 
-    // Row 3 = Machine (TM/HM, empty on a fresh save).
-    tapRow(3, 64);
+    // Cell 3 = Machine (TM/HM, empty on a fresh save).
+    tapGrid(3);
     inputScript.push_back(render("Pokemon Bag Machine via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Bag Restored 4 via touch", 4));
@@ -1162,15 +1172,15 @@ class SimulatorSmokeTest {
     inputScript.push_back(render("Pokemon Menu Restored 4 via touch", 4));
     inputScript.push_back(assertActivity("Pokemon"));
 
-    // Menu row 5 = Gym Battle (GymList) - view only, deliberately not
+    // Menu cell 5 = Gym Battle (GymList) - view only, deliberately not
     // tapping a gym row since that would launch a real battle.
-    tapRow(5, 64);
+    tapGrid(5);
     inputScript.push_back(render("Pokemon Gym List via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Menu Restored 5 via touch", 4));
 
-    // Menu row 6 = Badges - view only, same reasoning.
-    tapRow(6, 64);
+    // Menu cell 6 = Badges - view only, same reasoning.
+    tapGrid(6);
     inputScript.push_back(render("Pokemon Badges via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Menu Restored 6 via touch", 4));

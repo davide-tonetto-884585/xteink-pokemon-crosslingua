@@ -15,7 +15,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BOOK = ROOT / "test" / "epubs" / "test_reader_rendering_matrix.epub"
-POKEMON_ASSETS = ROOT / "fs_" / "pokemon"
+# fs_/pokemon is the simulator's own SD sandbox; images/pokemon is where a
+# locally built art pack lands (docs/artwork-setup.md). Either works.
+POKEMON_ASSET_CANDIDATES = (ROOT / "fs_" / "pokemon", ROOT / "images" / "pokemon")
 CRASH_PATTERNS = (
     "std::bad_alloc",
     "terminating due to uncaught exception",
@@ -69,10 +71,11 @@ def prepare_fs(temp_root: Path, book: Path) -> str:
 
 
 def prepare_pokemon_assets(temp_root: Path) -> None:
-    if not POKEMON_ASSETS.is_dir():
-        raise FileNotFoundError(f"Pokemon assets not found: {POKEMON_ASSETS}")
+    source = next((path for path in POKEMON_ASSET_CANDIDATES if path.is_dir()), None)
+    if source is None:
+        raise FileNotFoundError(f"Pokemon assets not found in any of: {', '.join(map(str, POKEMON_ASSET_CANDIDATES))}")
     target = temp_root / "fs_" / "pokemon"
-    shutil.copytree(POKEMON_ASSETS, target)
+    shutil.copytree(source, target)
     prepare_pokedex_card_fixture(target / "pokedex" / "portrait" / "004.bmp")
     prepare_pokedex_card_fixture(target / "pokedex" / "landscape" / "004.bmp", 288, 432)
 
@@ -188,7 +191,7 @@ def run_smoke(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--book", default=str(DEFAULT_BOOK), help="EPUB fixture to copy into the isolated simulator fs_")
-    parser.add_argument("--env", choices=("simulator", "sticky-simulator", "x4-pro-simulator", "pokemon-simulator-X3"), default="simulator",
+    parser.add_argument("--env", choices=("simulator", "sticky-simulator", "x4-pro-simulator", "pokemon-simulator-X3", "pokemon-x4-pro-simulator"), default="simulator",
                         help="PlatformIO simulator environment to build and run")
     parser.add_argument("--timeout", type=int, default=45, help="Seconds before the simulator run is treated as hung")
     parser.add_argument("--page-turns", type=int, default=2, help="Number of EPUB page-forward taps to run")
@@ -203,8 +206,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.landscape and not args.pokemon:
         parser.error("--landscape requires --pokemon")
-    if args.pokemon and args.env != "pokemon-simulator-X3":
-        parser.error("--pokemon requires --env pokemon-simulator-X3")
+    if args.pokemon and args.env not in ("pokemon-simulator-X3", "pokemon-x4-pro-simulator"):
+        parser.error("--pokemon requires --env pokemon-simulator-X3 or pokemon-x4-pro-simulator")
     if args.home_navigation and args.env != "pokemon-simulator-X3":
         parser.error("--home-navigation requires --env pokemon-simulator-X3")
     return args
