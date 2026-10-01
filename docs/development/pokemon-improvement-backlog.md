@@ -7,7 +7,7 @@ by cost and by whether they need a game-design decision; pick from the top.
 
 ## 1. Fix remaining inconsistencies (cheap, recommended first)
 
-1. **EPUB page-turn credit counts a turn that doesn't change the page.**
+1. ~~**EPUB page-turn credit counts a turn that doesn't change the page.**~~ **Won't do** (owner decision, 2026-10-01).
    `EpubReaderActivity::pageTurn()` credits any non-auto turn, including
    pressing back on the book's first page. `TxtReaderActivity` only credits
    when the page actually changed; EPUB should do the same.
@@ -33,16 +33,16 @@ by cost and by whether they need a game-design decision; pick from the top.
 
 ## 2. New features that fit "read to play"
 
-5. **Exp. All / Day Care.** Only the party leader earns reading XP, so the
+5. ~~**Exp. All / Day Care.**~~ **Won't do** (owner decision, 2026-10-01). Only the party leader earns reading XP, so the
    rest of the team can only catch up by fighting. Options: an Exp. All item
    (real Gen 1 item) that splits reading XP across the party, or a Day Care
    holding 1-2 Pokémon that earn a share while you read.
-6. **Pokémon Center.** Healing is reading (1 HP/min) or items only. A full
+6. ~~**Pokémon Center.**~~ **Won't do** (owner decision, 2026-10-01). Healing is reading (1 HP/min) or items only. A full
    party heal, rate-limited (e.g. once per 30 credited minutes), keeps it tied
    to reading.
-7. **Finish-a-book reward.** CrossInk already has "mark as finished"; hook a
+7. ~~**Finish-a-book reward.**~~ **Won't do** (owner decision, 2026-10-01). CrossInk already has "mark as finished"; hook a
    larger reward to it (guaranteed rare encounter, better ball, stone).
-8. **Reading-session summary.** On leaving a book: "32 minutes: +32 EXP,
+8. ~~**Reading-session summary.**~~ **Won't do** (owner decision, 2026-10-01). On leaving a book: "32 minutes: +32 EXP,
    1 wild Pokémon, 2 items". Optionally a daily reading streak with rewards.
 9. **Post-game content.** After the Champion there is little left: Elite Four
    rematches at higher levels, a Hall of Fame that keeps every championship,
@@ -70,7 +70,8 @@ by cost and by whether they need a game-design decision; pick from the top.
 15. **Legendary / Mew encounters repeat** until caught. Keep (guarantees the
     catch) or cap the number of appearances.
 
-## Suggested order
+## Status
 
-Group 1 first (cheap, fixes real inconsistencies), then #5 (Exp. All) and #8
-(session summary), the two changes a player would notice most.
+- Done after v1.2.4: 2, 3, 4.
+- Won't do (owner decision, 2026-10-01): 1, 5, 6, 7, 8. Don't re-propose them.
+- Still open: 9-13 (features/UI), 14-15 (need a balance decision first).
