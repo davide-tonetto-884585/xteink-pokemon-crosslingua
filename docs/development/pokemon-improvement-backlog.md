@@ -80,4 +80,13 @@ by cost and by whether they need a game-design decision; pick from the top.
 - Done after v1.2.4: 2, 3, 4, 10.
 - Won't do (owner decision, 2026-10-01): 1, 5, 6, 7, 8. Don't re-propose them.
 - Deferred: 9 (post-game; options recorded under item 9).
-- Still open: 11-13 (features/UI), 14-15 (need a balance decision first).
+- Shelved for now (owner decision, 2026-10-01): 11-15. Options discussed:
+  - 11 PC Box: sort by level (cheap), favourite flag (spare record flag bit),
+    species filter, bulk-release duplicates (only after favourites).
+  - 12 Pokédex hints generated from existing data (book-progress thresholds,
+    evolution method, legendary conditions); a "How to get" line on the detail
+    card, vague hints without names on "???" rows.
+  - 13 Save backup: rolling on-device backups in /.crosspoint/pokemon-backups
+    (named by progress, not date - no RTC), restore from the Pokémon Settings
+    menu with a full reload; a web ZIP download as a later step. Restoring by
+    overwriting files while the game runs is unsafe (cached store state).
