@@ -40,6 +40,7 @@ constexpr int BATTLE_MENU_ROW_HEIGHT = 64;
 // since Menu has no HUD above it - just the normal header.
 constexpr int MENU_GRID_COLUMNS = 2;
 constexpr int MENU_GRID_ROW_HEIGHT = 64;
+constexpr int STARTER_BUTTON_ROW_HEIGHT = 120;
 // An artwork list row reads left to right as: selection triangle (drawn by
 // fui::list at markerInset=4, see pokemonListPresentation()), then the icon,
 // then any text. This is the icon's left edge, offset far enough from the
@@ -89,6 +90,40 @@ void genderShinySuffix(char* buffer, const size_t size, const pokemon::Gender ge
   } else {
     snprintf(buffer, size, "%s ★", gender_str);
   }
+}
+
+const char* collectionActionLabel(const pokemon::CollectionAction action) {
+  const char* label = nullptr;
+  switch (action) {
+    case pokemon::CollectionAction::Summary:
+      label = tr(STR_POKEMON_SUMMARY);
+      break;
+    case pokemon::CollectionAction::Moveset:
+      label = tr(STR_POKEMON_MOVES);
+      break;
+    case pokemon::CollectionAction::Evolve:
+      label = tr(STR_POKEMON_EVOLVE_NOW);
+      break;
+    case pokemon::CollectionAction::Move:
+      label = tr(STR_POKEMON_MOVE);
+      break;
+    case pokemon::CollectionAction::Deposit:
+      label = tr(STR_POKEMON_DEPOSIT);
+      break;
+    case pokemon::CollectionAction::Withdraw:
+      label = tr(STR_POKEMON_WITHDRAW);
+      break;
+    case pokemon::CollectionAction::Release:
+      label = tr(STR_POKEMON_RELEASE);
+      break;
+    case pokemon::CollectionAction::Rename:
+      label = tr(STR_POKEMON_RENAME);
+      break;
+    case pokemon::CollectionAction::EvolutionPrompts:
+      label = tr(STR_POKEMON_EVOLUTIONS);
+      break;
+  }
+  return label;
 }
 
 const char* typeName(const pokemon::PokemonType type) {
@@ -643,7 +678,98 @@ bool PokemonActivity::isListScreen() const {
   return screen_ != Screen::Summary && screen_ != Screen::PokedexDetail && screen_ != Screen::Message &&
          screen_ != Screen::Battle && screen_ != Screen::BattleMoves && screen_ != Screen::Menu &&
          screen_ != Screen::Bag && screen_ != Screen::PcOrder && screen_ != Screen::Badges &&
-         screen_ != Screen::HallOfFame;
+         screen_ != Screen::HallOfFame && !isChoiceButtonScreen();
+}
+
+bool PokemonActivity::isChoiceButtonScreen() const {
+  switch (screen_) {
+    case Screen::Starter:
+    case Screen::Gender:
+    case Screen::NicknameQuestion:
+    case Screen::ResetFirst:
+    case Screen::ResetFinal:
+    case Screen::PcReleaseConfirm:
+    case Screen::EvolveConfirm:
+    case Screen::Event:
+    case Screen::Settings:
+    case Screen::Actions:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Settings and the single "OK" of a found item are one wide column; every
+// other choice screen is a 2-column grid like the main menu.
+int PokemonActivity::choiceColumns() const {
+  if (screen_ == Screen::Settings) return 1;
+  if (screen_ == Screen::Event) {
+    const pokemon::PendingEvent* pending = pokemon::pendingEventFront(snapshot_.state);
+    if (pending == nullptr || pending->kind == pokemon::PendingEventKind::Item) return 1;
+  }
+  return 2;
+}
+
+// Same 8px margin/gap and 64px rows as buttonGridCellRect(). An odd last
+// button (Move Learn's Cancel, a 7th action) spans the whole row. Event keeps
+// its buttons at the bottom, under the encounter/evolution art; every other
+// screen starts where its list used to (listTop() already leaves room for the
+// prompt and art drawn above).
+Rect PokemonActivity::choiceCellRect(const int index) const {
+  constexpr int margin = 8;
+  constexpr int gap = 8;
+  const int count = logicalCount();
+  const int columns = choiceColumns();
+  const int rows = (count + columns - 1) / columns;
+  int top = listTop();
+  if (screen_ == Screen::Event) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    top = renderer.getScreenHeight() - metrics.buttonHintsHeight - rows * MENU_GRID_ROW_HEIGHT - 8;
+  }
+  const int width = renderer.getScreenWidth() - 2 * margin;
+  const int row = index / columns;
+  const bool spansRow = columns > 1 && index == count - 1 && count % columns != 0;
+  const int buttonWidth = spansRow ? width : (width - gap * (columns - 1)) / columns;
+  const int x = margin + (spansRow ? 0 : (index % columns) * (buttonWidth + gap));
+  // Starter buttons are taller: each carries the Pokemon's picture.
+  const int rowHeight = screen_ == Screen::Starter ? STARTER_BUTTON_ROW_HEIGHT : MENU_GRID_ROW_HEIGHT;
+  return Rect{x, top + row * rowHeight, buttonWidth, rowHeight - 8};
+}
+
+// Left/Right step through the buttons in reading order; Up/Down move by a
+// row. With a single row (Yes/No, Catch/Pass...) Up/Down step like Left/Right,
+// so pressing Down to reach "No" still works as it did on the old list.
+void PokemonActivity::moveChoiceSelection(const MappedInputManager::Button direction) {
+  const int count = logicalCount();
+  if (count <= 0) return;
+  const int columns = choiceColumns();
+  const bool singleRow = count <= columns;
+  int next = selected_;
+  if (direction == MappedInputManager::Button::Right ||
+      (singleRow && direction == MappedInputManager::Button::Down)) {
+    next = (selected_ + 1) % count;
+  } else if (direction == MappedInputManager::Button::Left ||
+             (singleRow && direction == MappedInputManager::Button::Up)) {
+    next = (selected_ - 1 + count) % count;
+  } else if (direction == MappedInputManager::Button::Down) {
+    const int lastRowStart = ((count - 1) / columns) * columns;
+    next = selected_ + columns;
+    if (selected_ >= lastRowStart) {
+      next = selected_ % columns;  // wrap to the top of this column
+      if (selected_ == count - 1 && count % columns != 0) next = 0;
+    } else if (next >= count) {
+      next = count - 1;  // the wide last button
+    }
+  } else if (direction == MappedInputManager::Button::Up) {
+    next = selected_ - columns;
+    if (selected_ == count - 1 && count % columns != 0) next = count - 1 - columns;  // wide button -> row above
+    if (next < 0) {
+      const int lastRowStart = ((count - 1) / columns) * columns;
+      next = std::min(count - 1, lastRowStart + selected_ % columns);
+    }
+  }
+  selected_ = std::clamp(next, 0, count - 1);
+  requestUpdate();
 }
 
 int PokemonActivity::logicalCount() const {
@@ -2654,6 +2780,23 @@ void PokemonActivity::loop() {
   }
   const int count = logicalCount();
   if (count <= 0) return;
+  if (isChoiceButtonScreen()) {
+    if (mappedInput.hasTouchHardware()) {
+      for (int index = 0; index < count; ++index) {
+        const Rect cell = choiceCellRect(index);
+        if (mappedInput.wasTapInRect(cell.x, cell.y, cell.width, cell.height)) {
+          selected_ = index;
+          activate();
+          return;
+        }
+      }
+    }
+    for (const auto button : {MappedInputManager::Button::Right, MappedInputManager::Button::Left,
+                              MappedInputManager::Button::Down, MappedInputManager::Button::Up}) {
+      navigator_.onPressAndContinuous({button}, [this, button] { moveChoiceSelection(button); });
+    }
+    return;
+  }
   if (screen_ == Screen::Battle || screen_ == Screen::BattleMoves) {
     // These two screens bypass buildList()/fui::list() entirely (they draw
     // their own 2-column grid - see renderBattleMenu()/renderBattleMoveMenu()),
@@ -2977,36 +3120,7 @@ void PokemonActivity::buildRows() {
       case Screen::Actions: {
         const auto actions = pokemon::collectionActions(actionSource_ == Screen::Party, snapshot_.partyCount, canEvolveFocused());
         if (index >= actions.count) break;
-        const char* label = nullptr;
-        switch (actions.items[index]) {
-          case pokemon::CollectionAction::Summary:
-            label = tr(STR_POKEMON_SUMMARY);
-            break;
-          case pokemon::CollectionAction::Moveset:
-            label = tr(STR_POKEMON_MOVES);
-            break;
-          case pokemon::CollectionAction::Evolve:
-            label = tr(STR_POKEMON_EVOLVE_NOW);
-            break;
-          case pokemon::CollectionAction::Move:
-            label = tr(STR_POKEMON_MOVE);
-            break;
-          case pokemon::CollectionAction::Deposit:
-            label = tr(STR_POKEMON_DEPOSIT);
-            break;
-          case pokemon::CollectionAction::Withdraw:
-            label = tr(STR_POKEMON_WITHDRAW);
-            break;
-          case pokemon::CollectionAction::Release:
-            label = tr(STR_POKEMON_RELEASE);
-            break;
-          case pokemon::CollectionAction::Rename:
-            label = tr(STR_POKEMON_RENAME);
-            break;
-          case pokemon::CollectionAction::EvolutionPrompts:
-            label = tr(STR_POKEMON_EVOLUTIONS);
-            break;
-        }
+        const char* label = collectionActionLabel(actions.items[index]);
         row(local, label);
         break;
       }
@@ -3373,7 +3487,7 @@ void PokemonActivity::buildRows() {
 void PokemonActivity::buildList(UiApp::ScreenType& screen) {
   buildRows();
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const bool artRows = screen_ == Screen::Starter || screen_ == Screen::Party || screen_ == Screen::Move ||
+  const bool artRows = screen_ == Screen::Party || screen_ == Screen::Move ||
                        screen_ == Screen::Pc || screen_ == Screen::BagEvolution || screen_ == Screen::ItemTarget ||
                        screen_ == Screen::Pokedex || screen_ == Screen::BattleSwitch || screen_ == Screen::BagBalls ||
                        screen_ == Screen::BagMedicine || screen_ == Screen::BagMachine ||
@@ -4250,64 +4364,175 @@ const char* effectivenessLabel(const pokemon::MoveData& move, const pokemon::Bat
 }
 }  // namespace
 
-void PokemonActivity::renderBattleMoveMenu() {
-  const int count = battlePlayerMoveCount();
-  if (count <= 0) return;
+namespace {
+// One move as a two-line button body: name + PP, then type · power (or just
+// the type for a status move) with `effectiveness` (may be null) on the right.
+// The caller has already drawn the button chrome; `black` is the text colour.
+void drawMoveButtonContent(GfxRenderer& renderer, const Rect& cell, const bool black, const pokemon::MoveData* move,
+                           const char* ppText, const char* effectiveness) {
   constexpr int textPad = 10;
   constexpr int nameToPpGap = 8;
   constexpr int lineGap = 2;
+  const int ppWidth = renderer.getTextWidth(UI_10_FONT_ID, ppText);
+  const int nameMaxWidth = std::max(0, cell.width - 2 * textPad - nameToPpGap - ppWidth);
+  const std::string name =
+      renderer.truncatedText(UI_10_FONT_ID, move == nullptr ? "-" : move->name, nameMaxWidth, EpdFontFamily::BOLD);
+  const int line1Height = renderer.getLineHeight(UI_10_FONT_ID);
+  const int line2Height = renderer.getLineHeight(SMALL_FONT_ID);
+  const int line1Y = cell.y + std::max(0, (cell.height - line1Height - lineGap - line2Height) / 2);
+  const int line2Y = line1Y + line1Height + lineGap;
+  renderer.drawText(UI_10_FONT_ID, cell.x + textPad, line1Y, name.c_str(), black, EpdFontFamily::BOLD);
+  renderer.drawText(UI_10_FONT_ID, cell.x + cell.width - textPad - ppWidth, line1Y, ppText, black);
+  if (move == nullptr) return;
 
+  const int effectivenessWidth =
+      effectiveness == nullptr ? 0 : renderer.getTextWidth(SMALL_FONT_ID, effectiveness, EpdFontFamily::BOLD);
+  char detail[48];
+  if (move->category == pokemon::MoveCategory::Status || move->power == 0) {
+    snprintf(detail, sizeof(detail), "%s", typeName(move->type));
+  } else {
+    snprintf(detail, sizeof(detail), "%s · %u", typeName(move->type), move->power);
+  }
+  const int detailMaxWidth =
+      std::max(0, cell.width - 2 * textPad - (effectivenessWidth > 0 ? effectivenessWidth + nameToPpGap : 0));
+  const std::string detailText = renderer.truncatedText(SMALL_FONT_ID, detail, detailMaxWidth);
+  renderer.drawText(SMALL_FONT_ID, cell.x + textPad, line2Y, detailText.c_str(), black);
+  if (effectiveness != nullptr) {
+    renderer.drawText(SMALL_FONT_ID, cell.x + cell.width - textPad - effectivenessWidth, line2Y, effectiveness, black,
+                      EpdFontFamily::BOLD);
+  }
+}
+
+// A plain one-label button body: UI_12 bold, dropping to UI_10 and then
+// truncating when a translated label is too long for the cell.
+void drawButtonLabel(GfxRenderer& renderer, const Rect& cell, const bool black, const char* label) {
+  constexpr int textPad = 10;
+  const int maxWidth = std::max(0, cell.width - 2 * textPad);
+  int font = UI_12_FONT_ID;
+  std::string text = label == nullptr ? "" : label;
+  if (renderer.getTextWidth(font, text.c_str(), EpdFontFamily::BOLD) > maxWidth) {
+    font = UI_10_FONT_ID;
+    text = renderer.truncatedText(font, text.c_str(), maxWidth, EpdFontFamily::BOLD);
+  }
+  const int textWidth = renderer.getTextWidth(font, text.c_str(), EpdFontFamily::BOLD);
+  const int textX = cell.x + std::max(0, (cell.width - textWidth) / 2);
+  const int textY = cell.y + std::max(0, (cell.height - renderer.getLineHeight(font)) / 2);
+  renderer.drawText(font, textX, textY, text.c_str(), black, EpdFontFamily::BOLD);
+}
+}  // namespace
+
+void PokemonActivity::renderBattleMoveMenu() {
+  const int count = battlePlayerMoveCount();
+  if (count <= 0) return;
   for (int index = 0; index < count; ++index) {
     const Rect cell = battleGridCellRect(index);
-    const int x = cell.x;
-    const int y = cell.y;
-    const int buttonWidth = cell.width;
-    const int buttonHeight = cell.height;
-
-    const uint8_t moveId = battlePlayer_.moves[index].moveId;
-    const pokemon::MoveData* move = pokemon::moveData(moveId);
+    const pokemon::MoveData* move = pokemon::moveData(battlePlayer_.moves[index].moveId);
     char pp[16];
     snprintf(pp, sizeof(pp), "%u/%u", battlePlayer_.moves[index].currentPp,
              move == nullptr ? 0 : pokemon::maxPpFor(move->pp, battlePlayer_.ppUp[index]));
-    const int ppWidth = renderer.getTextWidth(UI_10_FONT_ID, pp);
-    const int nameMaxWidth = std::max(0, buttonWidth - 2 * textPad - nameToPpGap - ppWidth);
-    const std::string name =
-        renderer.truncatedText(UI_10_FONT_ID, move == nullptr ? "?" : move->name, nameMaxWidth, EpdFontFamily::BOLD);
-
     const bool selected = index == selected_;
     if (selected) {
-      renderer.fillRoundedRect(x, y, buttonWidth, buttonHeight, 6, Color::Black);
+      renderer.fillRoundedRect(cell.x, cell.y, cell.width, cell.height, 6, Color::Black);
     } else {
-      renderer.drawRoundedRect(x, y, buttonWidth, buttonHeight, 2, 6, true);
+      renderer.drawRoundedRect(cell.x, cell.y, cell.width, cell.height, 2, 6, true);
+    }
+    drawMoveButtonContent(renderer, cell, !selected, move, pp,
+                          move == nullptr ? nullptr : effectivenessLabel(*move, battleOpponent_));
+  }
+}
+
+void PokemonActivity::renderChoiceButtons() {
+  const int count = logicalCount();
+  if (count <= 0) return;
+  const pokemon::PendingEvent* pending =
+      screen_ == Screen::Event ? pokemon::pendingEventFront(snapshot_.state) : nullptr;
+  const bool moveLearn = pending != nullptr && pending->kind == pokemon::PendingEventKind::MoveLearn;
+  pokemon::BattleRecordEntry learnerMoves{};
+  if (moveLearn) {
+    pokemon::PokemonRecord record{};
+    if (service_.readRecord(pending->recordId, record) == pokemon::ServiceStatus::Ok) {
+      learnerMoves = service_.peekBattleMoves(record);
+    }
+  }
+  const auto actions = screen_ == Screen::Actions ? pokemon::collectionActions(actionSource_ == Screen::Party,
+                                                                               snapshot_.partyCount, canEvolveFocused())
+                                                  : pokemon::CollectionActionSet{};
+
+  for (int index = 0; index < count; ++index) {
+    const Rect cell = choiceCellRect(index);
+    const bool selected = index == selected_;
+    if (screen_ == Screen::Starter) {
+      // Black-on-black art would vanish inside a filled button, so a starter
+      // shows selection as a thick border instead.
+      renderer.drawRoundedRect(cell.x, cell.y, cell.width, cell.height, selected ? 4 : 1, 6, true);
+      constexpr int artW = 80;
+      constexpr int artH = 60;
+      pokemon::drawPokemonSpeciesArt(renderer, STARTERS[index], true,
+                                     Rect{cell.x + (cell.width - artW) / 2, cell.y + 8, artW, artH});
+      const char* name = speciesName(STARTERS[index]);
+      const int nameWidth = renderer.getTextWidth(UI_12_FONT_ID, name, EpdFontFamily::BOLD);
+      renderer.drawText(UI_12_FONT_ID, cell.x + std::max(0, (cell.width - nameWidth) / 2), cell.y + 8 + artH + 6,
+                        name, true, EpdFontFamily::BOLD);
+      continue;
+    }
+    if (selected) {
+      renderer.fillRoundedRect(cell.x, cell.y, cell.width, cell.height, 6, Color::Black);
+    } else {
+      renderer.drawRoundedRect(cell.x, cell.y, cell.width, cell.height, 2, 6, true);
     }
     const bool black = !selected;
 
-    // Two lines, centered as a block: name + PP, then the move's type and
-    // power (or "-" for a status move) with its effectiveness on the right.
-    const int line1Height = renderer.getLineHeight(UI_10_FONT_ID);
-    const int line2Height = renderer.getLineHeight(SMALL_FONT_ID);
-    const int line1Y = y + std::max(0, (buttonHeight - line1Height - lineGap - line2Height) / 2);
-    const int line2Y = line1Y + line1Height + lineGap;
-    renderer.drawText(UI_10_FONT_ID, x + textPad, line1Y, name.c_str(), black, EpdFontFamily::BOLD);
-    renderer.drawText(UI_10_FONT_ID, x + buttonWidth - textPad - ppWidth, line1Y, pp, black);
-    if (move == nullptr) continue;
+    if (moveLearn && index < static_cast<int>(pokemon::BATTLE_MOVE_SLOTS)) {
+      const pokemon::MoveData* move = pokemon::moveData(learnerMoves.moves[index]);
+      char pp[16];
+      snprintf(pp, sizeof(pp), "%u/%u", learnerMoves.pp[index],
+               move == nullptr ? 0 : pokemon::maxPpFor(move->pp, learnerMoves.ppUp[index]));
+      drawMoveButtonContent(renderer, cell, black, move, move == nullptr ? "" : pp, nullptr);
+      continue;
+    }
 
-    const char* effectiveness = effectivenessLabel(*move, battleOpponent_);
-    const int effectivenessWidth =
-        effectiveness == nullptr ? 0 : renderer.getTextWidth(SMALL_FONT_ID, effectiveness, EpdFontFamily::BOLD);
-    char detail[48];
-    if (move->category == pokemon::MoveCategory::Status || move->power == 0) {
-      snprintf(detail, sizeof(detail), "%s", typeName(move->type));
-    } else {
-      snprintf(detail, sizeof(detail), "%s · %u", typeName(move->type), move->power);
+    const char* label = "";
+    char combined[64];
+    switch (screen_) {
+      case Screen::Gender:
+        label = index == 0 ? tr(STR_POKEMON_MALE) : tr(STR_POKEMON_FEMALE);
+        break;
+      case Screen::NicknameQuestion:
+      case Screen::ResetFirst:
+      case Screen::ResetFinal:
+      case Screen::PcReleaseConfirm:
+      case Screen::EvolveConfirm:
+        label = index == 0 ? tr(STR_YES) : tr(STR_NO);
+        break;
+      case Screen::Settings:
+        if (index == 0) {
+          snprintf(combined, sizeof(combined), "%s: %s", tr(STR_POKEMON_HOME_SCREEN),
+                   SETTINGS.pokemonHomeScreen != 0 ? tr(STR_POKEMON_ON) : tr(STR_POKEMON_OFF));
+          label = combined;
+        } else {
+          label = tr(STR_POKEMON_RESET);
+        }
+        break;
+      case Screen::Actions:
+        label = index < actions.count ? collectionActionLabel(actions.items[index]) : "";
+        break;
+      case Screen::Event:
+        if (pending == nullptr) {
+          label = tr(STR_OK);
+        } else if (pending->kind == pokemon::PendingEventKind::Encounter) {
+          label = index == 0 ? tr(STR_POKEMON_CATCH) : tr(STR_POKEMON_PASS);
+        } else if (pending->kind == pokemon::PendingEventKind::Evolution) {
+          label = index == 0 ? tr(STR_POKEMON_EVOLVE) : tr(STR_POKEMON_CANCEL);
+        } else if (pending->kind == pokemon::PendingEventKind::MoveLearn) {
+          label = tr(STR_POKEMON_CANCEL);
+        } else {
+          label = tr(STR_OK);
+        }
+        break;
+      default:
+        break;
     }
-    const int detailMaxWidth = std::max(0, buttonWidth - 2 * textPad - (effectivenessWidth > 0 ? effectivenessWidth + nameToPpGap : 0));
-    const std::string detailText = renderer.truncatedText(SMALL_FONT_ID, detail, detailMaxWidth);
-    renderer.drawText(SMALL_FONT_ID, x + textPad, line2Y, detailText.c_str(), black);
-    if (effectiveness != nullptr) {
-      renderer.drawText(SMALL_FONT_ID, x + buttonWidth - textPad - effectivenessWidth, line2Y, effectiveness, black,
-                        EpdFontFamily::BOLD);
-    }
+    drawButtonLabel(renderer, cell, black, label);
   }
 }
 
@@ -4570,7 +4795,7 @@ void PokemonActivity::renderBattleHud() {
 }
 
 void PokemonActivity::renderRowArt() {
-  const bool artRows = screen_ == Screen::Starter || screen_ == Screen::Party || screen_ == Screen::Move ||
+  const bool artRows = screen_ == Screen::Party || screen_ == Screen::Move ||
                        screen_ == Screen::Pc || screen_ == Screen::BagEvolution || screen_ == Screen::ItemTarget ||
                        screen_ == Screen::Pokedex || screen_ == Screen::BattleSwitch || screen_ == Screen::BagBalls ||
                        screen_ == Screen::BagMedicine || screen_ == Screen::BagMachine ||
@@ -4914,6 +5139,7 @@ void PokemonActivity::render(RenderLock&&) {
   app_.render();
   uiReady_ = true;
   renderFocused();
+  if (isChoiceButtonScreen()) renderChoiceButtons();
   renderRowArt();
   renderer.displayBuffer(cleanRefreshNeeded_ ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
   cleanRefreshNeeded_ = false;

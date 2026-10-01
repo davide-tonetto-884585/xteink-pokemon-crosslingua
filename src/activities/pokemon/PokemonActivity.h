@@ -181,6 +181,14 @@ class PokemonActivity final : public Activity {
   int trainerCardCells(pokemon::PokemonUiRect* cells, int capacity, bool hallOfFame) const;
   void renderBagGrid();
   void renderPcOrderButtons();
+  // Short-choice screens (prompts, confirmations, Event, Starter, Settings,
+  // Actions) render their options as buttons instead of a text list - see
+  // isChoiceButtonScreen().
+  bool isChoiceButtonScreen() const;
+  int choiceColumns() const;
+  Rect choiceCellRect(int index) const;
+  void renderChoiceButtons();
+  void moveChoiceSelection(MappedInputManager::Button direction);
   int buttonGridTop() const;
   Rect buttonGridCellRect(int index, int columns = 2) const;
   void drawGridButton(const Rect& cell, bool selected, const char* label);

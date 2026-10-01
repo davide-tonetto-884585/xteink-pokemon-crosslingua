@@ -1086,16 +1086,17 @@ class SimulatorSmokeTest {
     tapRow(0, 96);
     inputScript.push_back(render("Pokemon Actions via touch", 4));
 
-    // Actions row 0 = Summary (collectionActions() always appends it first).
-    tapRow(0, 64);
+    // Actions is a 2-column button grid: cell 0 = Summary (collectionActions()
+    // always appends it first).
+    tapGrid(0);
     inputScript.push_back(render("Pokemon Summary via touch", 4));
 
     tapBack();
     inputScript.push_back(render("Pokemon Actions Restored via touch", 4));
 
-    // Actions row 1 = Moveset (collectionActions() always appends it
-    // second, right after Summary).
-    tapRow(1, 64);
+    // Actions cell 1 = Moveset (a fresh level-5 starter can't "Evolve now",
+    // so Moveset comes right after Summary).
+    tapGrid(1);
     inputScript.push_back(render("Pokemon Moveset via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Actions Restored 2 via touch", 4));
@@ -1246,14 +1247,16 @@ class SimulatorSmokeTest {
     // Screen::Event (the queued wild encounter) is bottom-anchored (see
     // buildList()'s bottomAnchored check), not top-anchored like every list
     // screen the earlier touch script visited.
-    const int eventRowCount = 2;  // Catch / Run
-    const int eventTop = renderer.getScreenHeight() - metrics.buttonHintsHeight - eventRowCount * listRowHeight - 8;
+    // Catch | Pass: one row of two buttons at the bottom
+    // (PokemonActivity::choiceCellRect()).
+    const int eventTop = renderer.getScreenHeight() - metrics.buttonHintsHeight - listRowHeight - 8;
+    const int catchX = 8 + (renderer.getScreenWidth() - 2 * 8 - 8) / 4;
     inputScript.push_back(render("Pokemon Event via touch", 4));
     inputScript.push_back(assertActivity("Pokemon"));
     {
-      const int y = eventTop + 0 * listRowHeight + listRowHeight / 2;
-      inputScript.push_back(touchDown(centerX, y));
-      inputScript.push_back(touchRelease(centerX, y));
+      const int y = eventTop + (listRowHeight - 8) / 2;
+      inputScript.push_back(touchDown(catchX, y));
+      inputScript.push_back(touchRelease(catchX, y));
     }
     inputScript.push_back(render("Pokemon Battle via touch", 6));
     inputScript.push_back(assertActivity("Pokemon"));

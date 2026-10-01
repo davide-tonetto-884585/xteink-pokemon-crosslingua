@@ -2,6 +2,7 @@
 
 ### Added
 
+- The remaining text-list choices are now buttons, matching the main menu and battle menu: wild encounter (Catch/Pass), evolution prompt, found item (OK), learning a new move (your four moves as buttons with type and power, plus Cancel), starter choice (with each Pokémon's picture), gender, nickname and every Yes/No confirmation, Pokémon Settings, and a Pokémon's action menu. On X3, Up/Down still switch between two side-by-side buttons.
 - Battle move buttons now show each move's type and power on a second line, plus its damage multiplier against the current opponent (×4, ×2, ×½, ×¼, ×0; nothing when neutral).
 
 ### Fixed
