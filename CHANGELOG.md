@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Added
+
+- The Bag now describes each item on a second line under its name: what a Medicine or status cure restores, which stone or ball it is, what a vitamin or battle item raises, and so on. This applies to Stones, Medicine and Balls in the Bag, and to Bag and Balls during battle. Translated into all 28 languages.
+
 ## [1.3.0] - 2026-10-01
 
 ### Added

@@ -92,6 +92,113 @@ void genderShinySuffix(char* buffer, const size_t size, const pokemon::Gender ge
   }
 }
 
+// One short line saying what an item does, built from its catalog data
+// (category, effect value, cured ailment) so each template is translated once
+// instead of every item separately. TMs/HMs keep their taught-move subtitle.
+void itemDescription(const uint8_t itemId, char* buffer, const size_t size) {
+  buffer[0] = '\0';
+  const pokemon::ItemData* item = pokemon::itemData(itemId);
+  if (item == nullptr) return;
+  // Vitamins (HP Up..Carbos) follow StatIndex order; X items are Attack,
+  // Defense, Speed, Special (ids 85-88).
+  const char* const VITAMIN_STATS[] = {tr(STR_POKEMON_STAT_HP), tr(STR_POKEMON_STAT_ATTACK),
+                                       tr(STR_POKEMON_STAT_DEFENSE), tr(STR_POKEMON_STAT_SPECIAL),
+                                       tr(STR_POKEMON_STAT_SPEED)};
+  const char* const X_ITEM_STATS[] = {tr(STR_POKEMON_STAT_ATTACK), tr(STR_POKEMON_STAT_DEFENSE),
+                                      tr(STR_POKEMON_STAT_SPEED), tr(STR_POKEMON_STAT_SPECIAL)};
+  constexpr uint8_t LINK_CABLE_ID = 6;
+  constexpr uint8_t GREAT_BALL_ID = 8;
+  constexpr uint8_t ULTRA_BALL_ID = 9;
+  constexpr uint8_t MASTER_BALL_ID = 10;
+  constexpr uint8_t REVIVE_ID = 15;
+  constexpr uint8_t MAX_REVIVE_ID = 16;
+  constexpr uint8_t GUARD_SPEC_ID = 89;
+  constexpr uint8_t DIRE_HIT_ID = 90;
+  const bool full = item->effectValue == UINT8_MAX;
+  switch (item->category) {
+    case pokemon::ItemCategory::Stone:
+      snprintf(buffer, size, "%s", itemId == LINK_CABLE_ID ? tr(STR_POKEMON_ITEM_DESC_LINK_CABLE) : tr(STR_POKEMON_ITEM_DESC_STONE));
+      return;
+    case pokemon::ItemCategory::Ball:
+      snprintf(buffer, size, "%s",
+               itemId == MASTER_BALL_ID  ? tr(STR_POKEMON_ITEM_DESC_MASTER_BALL)
+               : itemId == ULTRA_BALL_ID ? tr(STR_POKEMON_ITEM_DESC_ULTRA_BALL)
+               : itemId == GREAT_BALL_ID ? tr(STR_POKEMON_ITEM_DESC_GREAT_BALL)
+                                         : tr(STR_POKEMON_ITEM_DESC_POKE_BALL));
+      return;
+    case pokemon::ItemCategory::Medicine:
+      if (itemId == REVIVE_ID || itemId == MAX_REVIVE_ID) {
+        snprintf(buffer, size, "%s", itemId == REVIVE_ID ? tr(STR_POKEMON_ITEM_DESC_REVIVE) : tr(STR_POKEMON_ITEM_DESC_MAX_REVIVE));
+      } else if (item->curesAilment == pokemon::Ailment::All) {
+        snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_FULL_RESTORE));
+      } else if (full) {
+        snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_HEAL_FULL));
+      } else {
+        snprintf(buffer, size, tr(STR_POKEMON_ITEM_DESC_HEAL_HP), item->effectValue);
+      }
+      return;
+    case pokemon::ItemCategory::StatusCure: {
+      const char* text = tr(STR_POKEMON_ITEM_DESC_CURE_ALL);
+      switch (item->curesAilment) {
+        case pokemon::Ailment::Poison:
+          text = tr(STR_POKEMON_ITEM_DESC_CURE_POISON);
+          break;
+        case pokemon::Ailment::Burn:
+          text = tr(STR_POKEMON_ITEM_DESC_CURE_BURN);
+          break;
+        case pokemon::Ailment::Freeze:
+          text = tr(STR_POKEMON_ITEM_DESC_CURE_FREEZE);
+          break;
+        case pokemon::Ailment::Sleep:
+          text = tr(STR_POKEMON_ITEM_DESC_CURE_SLEEP);
+          break;
+        case pokemon::Ailment::Paralysis:
+          text = tr(STR_POKEMON_ITEM_DESC_CURE_PARALYSIS);
+          break;
+        default:
+          break;
+      }
+      snprintf(buffer, size, "%s", text);
+      return;
+    }
+    case pokemon::ItemCategory::PPRestore:
+      if (pokemon::restoresSingleMovePp(itemId)) {
+        if (full) {
+          snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_PP_ONE_FULL));
+        } else {
+          snprintf(buffer, size, tr(STR_POKEMON_ITEM_DESC_PP_ONE), item->effectValue);
+        }
+      } else if (full) {
+        snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_PP_ALL_FULL));
+      } else {
+        snprintf(buffer, size, tr(STR_POKEMON_ITEM_DESC_PP_ALL), item->effectValue);
+      }
+      return;
+    case pokemon::ItemCategory::Candy:
+      snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_RARE_CANDY));
+      return;
+    case pokemon::ItemCategory::PpUp:
+      snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_PP_UP));
+      return;
+    case pokemon::ItemCategory::Vitamin:
+      if (itemId >= pokemon::VITAMIN_ITEM_ID_FIRST && itemId <= pokemon::VITAMIN_ITEM_ID_LAST) {
+        snprintf(buffer, size, tr(STR_POKEMON_ITEM_DESC_VITAMIN), VITAMIN_STATS[itemId - pokemon::VITAMIN_ITEM_ID_FIRST]);
+      }
+      return;
+    case pokemon::ItemCategory::BattleBoost:
+      if (itemId == GUARD_SPEC_ID) {
+        snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_GUARD_SPEC));
+      } else if (itemId == DIRE_HIT_ID) {
+        snprintf(buffer, size, "%s", tr(STR_POKEMON_ITEM_DESC_DIRE_HIT));
+      } else if (itemId >= pokemon::BATTLE_BOOST_ITEM_ID_FIRST && itemId < GUARD_SPEC_ID) {
+        snprintf(buffer, size, tr(STR_POKEMON_ITEM_DESC_X_ITEM), X_ITEM_STATS[itemId - pokemon::BATTLE_BOOST_ITEM_ID_FIRST]);
+      }
+      return;
+    case pokemon::ItemCategory::Machine:
+      return;
+  }
+}
+
 const char* collectionActionLabel(const pokemon::CollectionAction action) {
   const char* label = nullptr;
   switch (action) {
@@ -3007,6 +3114,7 @@ void PokemonActivity::buildRows() {
     labels_[i].fill('\0');
     values_[i].fill('\0');
     subtitles_[i].fill('\0');
+    itemRowNames_[i].fill('\0');
   }
   const int start = pageStart();
   const int total = logicalCount();
@@ -3018,24 +3126,17 @@ void PokemonActivity::buildRows() {
     rows_[local].value = value == nullptr ? nullptr : values_[local].data();
     rows_[local].actionValue = static_cast<int16_t>(start + local);
   };
-  // "<name>  × <count>" rows on artwork lists: the count rides on the name's
-  // line when both fit in the row's content width (artwork rows only get
-  // screenWidth - 16 - 2 * 112 of it, 240px on the X4 Pro), and drops to its
-  // own subtitle line otherwise (e.g. "Thunder Stone × 12", "Paralyze Heal
-  // × 255") instead of being ellipsis-truncated.
-  const auto rowWithCount = [this, &row](const int local, const char* name, const char* count) {
-    const int contentWidth = renderer.getScreenWidth() - 16 - 2 * 112;
-    constexpr int valueInset = 8;
-    constexpr int textGap = 10;
-    const int needed = renderer.getTextWidth(UI_12_FONT_ID, name) + renderer.getTextWidth(UI_12_FONT_ID, count) +
-                       valueInset + textGap;
-    if (needed <= contentWidth) {
-      row(local, name, count);
-      return;
-    }
-    row(local, name);
-    snprintf(subtitles_[local].data(), subtitles_[local].size(), "%s", count);
-    rows_[local].subtitle = subtitles_[local].data();
+  // Bag rows: name + count on the first line, what the item does underneath.
+  // The list's own label/subtitle slots are confined to the band between its
+  // symmetric 112px artwork paddings (~290px), too narrow for a translated
+  // description, so the row is registered empty (touch/selection still work)
+  // and renderItemRowText() draws all three out to the right edge instead.
+  const auto rowWithDescription = [this, &row](const int local, const uint8_t itemId, const char* name,
+                                               const char* count) {
+    row(local, "");
+    snprintf(itemRowNames_[local].data(), itemRowNames_[local].size(), "%s", name);
+    snprintf(values_[local].data(), values_[local].size(), "%s", count);
+    itemDescription(itemId, subtitles_[local].data(), subtitles_[local].size());
   };
 
   // focusedRecord_ is constant across the whole pass, so peek its moveset once
@@ -3251,7 +3352,7 @@ void PokemonActivity::buildRows() {
         const auto item = static_cast<pokemon::EvolutionItem>(slot + 1);
         char count[16];
         snprintf(count, sizeof(count), "× %u", snapshot_.state.itemCounts[slot]);
-        rowWithCount(local, itemName(item), count);
+        rowWithDescription(local, static_cast<uint8_t>(slot + 1), itemName(item), count);
         break;
       }
       case Screen::BagBalls: {
@@ -3265,7 +3366,8 @@ void PokemonActivity::buildRows() {
             pokemon::itemData(static_cast<uint8_t>(pokemon::EVOLUTION_ITEM_COUNT + 1 + slot));
         char count[16];
         snprintf(count, sizeof(count), "× %u", snapshot_.state.bagCounts[slot]);
-        rowWithCount(local, item == nullptr ? "?" : item->name, count);
+        rowWithDescription(local, static_cast<uint8_t>(pokemon::EVOLUTION_ITEM_COUNT + 1 + slot),
+                           item == nullptr ? "?" : item->name, count);
         break;
       }
       case Screen::BagMedicine: {
@@ -3280,7 +3382,7 @@ void PokemonActivity::buildRows() {
           const pokemon::ItemData* data = pokemon::itemData(itemId);
           char count[16];
           snprintf(count, sizeof(count), "× %u", extraItemCountFor(snapshot_.state, itemId));
-          rowWithCount(local, data == nullptr ? "?" : data->name, count);
+          rowWithDescription(local, itemId, data == nullptr ? "?" : data->name, count);
           break;
         }
         const uint8_t itemId = bagItemIdAt(static_cast<size_t>(index), snapshot_.state.bagCounts, isMedicineCategory);
@@ -3289,9 +3391,7 @@ void PokemonActivity::buildRows() {
         char count[16];
         snprintf(count, sizeof(count), "× %u",
                  bagIndex < snapshot_.state.bagCounts.size() ? snapshot_.state.bagCounts[bagIndex] : 0);
-        char label[56];
-        snprintf(label, sizeof(label), "%s", data == nullptr ? "?" : data->name);
-        rowWithCount(local, label, count);
+        rowWithDescription(local, itemId, data == nullptr ? "?" : data->name, count);
         break;
       }
       case Screen::BagMachine: {
@@ -3426,7 +3526,7 @@ void PokemonActivity::buildRows() {
           const pokemon::ItemData* item = pokemon::itemData(itemId);
           char value[16];
           snprintf(value, sizeof(value), "× %u", extraItemCountFor(snapshot_.state, itemId));
-          rowWithCount(local, item == nullptr ? "?" : item->name, value);
+          rowWithDescription(local, itemId, item == nullptr ? "?" : item->name, value);
           break;
         }
         const uint8_t itemId =
@@ -3436,7 +3536,7 @@ void PokemonActivity::buildRows() {
         char value[16];
         snprintf(value, sizeof(value), "× %u",
                  bagIndex < snapshot_.state.bagCounts.size() ? snapshot_.state.bagCounts[bagIndex] : 0);
-        rowWithCount(local, item == nullptr ? "?" : item->name, value);
+        rowWithDescription(local, itemId, item == nullptr ? "?" : item->name, value);
         break;
       }
       case Screen::BattleBalls: {
@@ -3447,7 +3547,8 @@ void PokemonActivity::buildRows() {
             pokemon::itemData(static_cast<uint8_t>(pokemon::EVOLUTION_ITEM_COUNT + 1 + slot));
         char value[16];
         snprintf(value, sizeof(value), "× %u", snapshot_.state.bagCounts[slot]);
-        rowWithCount(local, item == nullptr ? "?" : item->name, value);
+        rowWithDescription(local, static_cast<uint8_t>(pokemon::EVOLUTION_ITEM_COUNT + 1 + slot),
+                           item == nullptr ? "?" : item->name, value);
         break;
       }
       case Screen::GymList: {
@@ -4902,6 +5003,7 @@ void PokemonActivity::renderRowArt() {
     } else if (showsMachineCapabilityRows() && start + local < snapshot_.partyCount) {
       renderPartyRowMachineCapability(rowY, snapshot_.party[start + local]);
     }
+    if (showsItemDescriptionRows()) renderItemRowText(rowY, local);
   }
 }
 
@@ -4919,6 +5021,38 @@ void PokemonActivity::renderRowArt() {
 // area is drawn here for it, exactly as before. peekBattleMoves() is
 // read-only (never creates or writes a battle-store entry), matching every
 // other read-only HP peek in this file (Summary, usablePartySlotAt()).
+bool PokemonActivity::showsItemDescriptionRows() const {
+  return screen_ == Screen::BagEvolution || screen_ == Screen::BagMedicine || screen_ == Screen::BagBalls ||
+         screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls;
+}
+
+// A Bag row's name and "× count" on the first line, the item's description
+// underneath, starting where the list's text would (just right of the icon)
+// and running to the right edge - see rowWithDescription in buildRows().
+void PokemonActivity::renderItemRowText(const int rowY, const int local) {
+  if (local < 0 || local >= rowCount_ || itemRowNames_[local][0] == '\0') return;
+  const int textX = listBounds_.x + 112;
+  const int textRight = listBounds_.x + listBounds_.width - 8;
+  const int width = std::max(0, textRight - textX);
+  constexpr int countGap = 10;
+  const int line1Height = renderer.getLineHeight(UI_12_FONT_ID);
+  const int line2Height = renderer.getLineHeight(UI_10_FONT_ID);
+  const bool hasDescription = subtitles_[local][0] != '\0';
+  const int blockHeight = line1Height + (hasDescription ? 2 + line2Height : 0);
+  const int line1Y = rowY + std::max(0, (rowHeight_ - blockHeight) / 2);
+
+  const char* count = values_[local].data();
+  const int countWidth = renderer.getTextWidth(UI_12_FONT_ID, count);
+  renderer.drawText(UI_12_FONT_ID, textRight - countWidth, line1Y, count);
+  const std::string name =
+      renderer.truncatedText(UI_12_FONT_ID, itemRowNames_[local].data(), std::max(0, width - countWidth - countGap));
+  renderer.drawText(UI_12_FONT_ID, textX, line1Y, name.c_str());
+  if (hasDescription) {
+    const std::string description = renderer.truncatedText(UI_10_FONT_ID, subtitles_[local].data(), width);
+    renderer.drawText(UI_10_FONT_ID, textX, line1Y + line1Height + 2, description.c_str());
+  }
+}
+
 void PokemonActivity::renderPartyRowHealth(const int rowY, const pokemon::PokemonRecord& record) {
   const pokemon::BaseStats* stats = pokemon::baseStatsFor(record.speciesId);
   // ensureIvEv(), not peekIvEv() - the party list's max-HP figure should

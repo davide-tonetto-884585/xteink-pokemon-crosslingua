@@ -181,6 +181,8 @@ class PokemonActivity final : public Activity {
   int trainerCardCells(pokemon::PokemonUiRect* cells, int capacity, bool hallOfFame) const;
   void renderBagGrid();
   void renderPcOrderButtons();
+  bool showsItemDescriptionRows() const;
+  void renderItemRowText(int rowY, int local);
   // Short-choice screens (prompts, confirmations, Event, Starter, Settings,
   // Actions) render their options as buttons instead of a text list - see
   // isChoiceButtonScreen().
@@ -294,7 +296,10 @@ class PokemonActivity final : public Activity {
   // since its value slot is a static tr() string with no buffer of its own
   // to free up; these screens' value slots aren't always free that way, so
   // they get this dedicated buffer.
-  std::array<std::array<char, 24>, ROW_CAPACITY> subtitles_{};
+  // Room for a translated item description (Bag rows), not just a short tag.
+  std::array<std::array<char, 128>, ROW_CAPACITY> subtitles_{};
+  // Bag rows draw their own name (see renderItemRowText()); the list row's label stays empty.
+  std::array<std::array<char, 56>, ROW_CAPACITY> itemRowNames_{};
   Rect listBounds_{};
   int rowHeight_ = 0;
   bool cleanRefreshNeeded_ = true;
