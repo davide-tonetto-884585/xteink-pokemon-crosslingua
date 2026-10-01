@@ -55,7 +55,7 @@ by cost and by whether they need a game-design decision; pick from the top.
 
 ## 3. UI improvements
 
-10. **Battle move info.** Show a move's type, power and accuracy in the FIGHT
+10. ~~**Battle move info.**~~ **Done** (2026-10-01): a second line in each move button shows type · power and the multiplier against the opponent. The battle-log-panel idea was not done (touch taps use the move immediately, so it would only help X3). Show a move's type, power and accuracy in the FIGHT
     menu, plus an effectiveness hint against the current opponent.
 11. **PC Box tools.** Sort by level, favourite (protect from release), filter
     by species, bulk-release duplicates.
@@ -77,7 +77,7 @@ by cost and by whether they need a game-design decision; pick from the top.
 
 ## Status
 
-- Done after v1.2.4: 2, 3, 4.
+- Done after v1.2.4: 2, 3, 4, 10.
 - Won't do (owner decision, 2026-10-01): 1, 5, 6, 7, 8. Don't re-propose them.
 - Deferred: 9 (post-game; options recorded under item 9).
-- Still open: 10-13 (features/UI), 14-15 (need a balance decision first).
+- Still open: 11-13 (features/UI), 14-15 (need a balance decision first).
