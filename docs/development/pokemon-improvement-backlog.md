@@ -44,7 +44,12 @@ by cost and by whether they need a game-design decision; pick from the top.
    larger reward to it (guaranteed rare encounter, better ball, stone).
 8. ~~**Reading-session summary.**~~ **Won't do** (owner decision, 2026-10-01). On leaving a book: "32 minutes: +32 EXP,
    1 wild Pokémon, 2 items". Optionally a daily reading streak with rewards.
-9. **Post-game content.** After the Champion there is little left: Elite Four
+9. **Post-game content.** *Deferred (2026-10-01).* Discussed options: Mewtwo only after the
+   Champion (as Cerulean Cave in Red/Blue), a Pokédex diploma, a multi-entry
+   Hall of Fame, and Elite Four/Champion rematches - in Gen 1 those keep the
+   same teams/levels; stronger rematch teams are a later-generation feature.
+   Any repeatable rematch needs a reading-time gate so it can't replace
+   reading as an XP source. After the Champion there is little left: Elite Four
    rematches at higher levels, a Hall of Fame that keeps every championship,
    Trainer Card stats (battles won, catches, shinies).
 
@@ -74,4 +79,5 @@ by cost and by whether they need a game-design decision; pick from the top.
 
 - Done after v1.2.4: 2, 3, 4.
 - Won't do (owner decision, 2026-10-01): 1, 5, 6, 7, 8. Don't re-propose them.
-- Still open: 9-13 (features/UI), 14-15 (need a balance decision first).
+- Deferred: 9 (post-game; options recorded under item 9).
+- Still open: 10-13 (features/UI), 14-15 (need a balance decision first).
