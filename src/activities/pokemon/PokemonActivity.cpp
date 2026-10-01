@@ -4217,11 +4217,45 @@ void PokemonActivity::renderBattleMenu() {
 // with it), PP in the plain (non-bold) weight on the right so it reads as
 // secondary - there's no smaller font available on this device to shrink it
 // further (only UI_10_FONT_ID/UI_12_FONT_ID exist).
+namespace {
+// Damage multiplier label against the current opponent, e.g. "×2", "×½", "×0" -
+// nullptr when neutral (nothing worth a glance). Fixed-damage moves (Seismic
+// Toss, Dragon Rage...) ignore the multiplier except for immunity, and status
+// moves show nothing.
+const char* effectivenessLabel(const pokemon::MoveData& move, const pokemon::BattleCombatant& target) {
+  if (move.category == pokemon::MoveCategory::Status) return nullptr;
+  pokemon::PokemonType primary = target.conversionType1;
+  pokemon::PokemonType secondary = target.conversionType2;
+  if (primary == pokemon::PokemonType::None) {
+    const pokemon::SpeciesData* species = pokemon::speciesData(target.speciesId);
+    if (species == nullptr) return nullptr;
+    primary = species->primaryType;
+    secondary = species->secondaryType;
+  }
+  const uint16_t percent = pokemon::typeEffectivenessPercent(move.type, primary, secondary);
+  if (percent == 0) return "×0";
+  if (move.power == 0) return nullptr;
+  switch (percent) {
+    case 400:
+      return "×4";
+    case 200:
+      return "×2";
+    case 50:
+      return "×½";
+    case 25:
+      return "×¼";
+    default:
+      return nullptr;
+  }
+}
+}  // namespace
+
 void PokemonActivity::renderBattleMoveMenu() {
   const int count = battlePlayerMoveCount();
   if (count <= 0) return;
   constexpr int textPad = 10;
   constexpr int nameToPpGap = 8;
+  constexpr int lineGap = 2;
 
   for (int index = 0; index < count; ++index) {
     const Rect cell = battleGridCellRect(index);
@@ -4247,9 +4281,33 @@ void PokemonActivity::renderBattleMoveMenu() {
       renderer.drawRoundedRect(x, y, buttonWidth, buttonHeight, 2, 6, true);
     }
     const bool black = !selected;
-    const int textY = y + std::max(0, (buttonHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2);
-    renderer.drawText(UI_10_FONT_ID, x + textPad, textY, name.c_str(), black, EpdFontFamily::BOLD);
-    renderer.drawText(UI_10_FONT_ID, x + buttonWidth - textPad - ppWidth, textY, pp, black);
+
+    // Two lines, centered as a block: name + PP, then the move's type and
+    // power (or "-" for a status move) with its effectiveness on the right.
+    const int line1Height = renderer.getLineHeight(UI_10_FONT_ID);
+    const int line2Height = renderer.getLineHeight(SMALL_FONT_ID);
+    const int line1Y = y + std::max(0, (buttonHeight - line1Height - lineGap - line2Height) / 2);
+    const int line2Y = line1Y + line1Height + lineGap;
+    renderer.drawText(UI_10_FONT_ID, x + textPad, line1Y, name.c_str(), black, EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, x + buttonWidth - textPad - ppWidth, line1Y, pp, black);
+    if (move == nullptr) continue;
+
+    const char* effectiveness = effectivenessLabel(*move, battleOpponent_);
+    const int effectivenessWidth =
+        effectiveness == nullptr ? 0 : renderer.getTextWidth(SMALL_FONT_ID, effectiveness, EpdFontFamily::BOLD);
+    char detail[48];
+    if (move->category == pokemon::MoveCategory::Status || move->power == 0) {
+      snprintf(detail, sizeof(detail), "%s", typeName(move->type));
+    } else {
+      snprintf(detail, sizeof(detail), "%s · %u", typeName(move->type), move->power);
+    }
+    const int detailMaxWidth = std::max(0, buttonWidth - 2 * textPad - (effectivenessWidth > 0 ? effectivenessWidth + nameToPpGap : 0));
+    const std::string detailText = renderer.truncatedText(SMALL_FONT_ID, detail, detailMaxWidth);
+    renderer.drawText(SMALL_FONT_ID, x + textPad, line2Y, detailText.c_str(), black);
+    if (effectiveness != nullptr) {
+      renderer.drawText(SMALL_FONT_ID, x + buttonWidth - textPad - effectivenessWidth, line2Y, effectiveness, black,
+                        EpdFontFamily::BOLD);
+    }
   }
 }
 

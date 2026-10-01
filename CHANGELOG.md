@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Added
+
+- Battle move buttons now show each move's type and power on a second line, plus its damage multiplier against the current opponent (×4, ×2, ×½, ×¼, ×0; nothing when neutral).
+
 ### Fixed
 
 - Levelling up while reading now adds the max-HP gain to current HP, the same as Rare Candy and battle wins already did.
