@@ -14,6 +14,7 @@
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "components/OptionPopup.h"
+#include "components/themes/bookshelf/BookshelfHome.h"
 #include "util/ButtonNavigator.h"
 #if defined(CROSSINK_ENABLE_POKEMON)
 #include "pokemon/PokemonService.h"
@@ -50,6 +51,9 @@ class HomeActivity final : public Activity {
   bool hasClippings = false;
   bool hasOpdsServers = false;
   bool minimalMenuOpen = false;
+  // Bookshelf theme (see BookshelfHome): shelves are filled once recents are loaded.
+  BookshelfHome bookshelf_;
+  bool bookshelfLoaded_ = false;
   bool minimalSuppressInitialFrontRelease = false;
   bool homeBookSwapLongPressHandled = false;
   bool quickActionsLongPowerHandled = false;
@@ -137,6 +141,10 @@ class HomeActivity final : public Activity {
   void loadRecentBooks(int maxBooks);
   void loadAllBookStats();
   void loadRecentCovers(int coverHeight);
+  void loadBookshelf();
+  void renderBookshelf(int pageWidth, int pageHeight);
+  // Tap handling for the Bookshelf home; true if the tap was consumed.
+  bool handleBookshelfTap(int x, int y);
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

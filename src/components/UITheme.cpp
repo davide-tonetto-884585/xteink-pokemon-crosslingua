@@ -16,6 +16,7 @@
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/themes/BaseTheme.h"
+#include "components/themes/bookshelf/BookshelfMetrics.h"
 #include "components/themes/dashboard/DashboardTheme.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraCarouselTheme.h"
@@ -101,6 +102,13 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       LOG_DBG("UI", "Using Dashboard theme");
       currentTheme = std::make_unique<DashboardTheme>();
       currentMetrics = &DashboardMetrics::values;
+      break;
+    case CrossPointSettings::UI_THEME::BOOKSHELF:
+      // Only Home differs (HomeActivity draws the shelves); every other screen
+      // uses the Minimal look.
+      LOG_DBG("UI", "Using Bookshelf theme");
+      currentTheme = std::make_unique<MinimalTheme>();
+      currentMetrics = &BookshelfMetrics::values;
       break;
     default:
       LOG_ERR("UI", "Unknown theme %d, falling back to Classic", static_cast<int>(type));

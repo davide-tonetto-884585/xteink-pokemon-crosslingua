@@ -376,7 +376,26 @@ bool isDashboardTheme() {
   return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::DASHBOARD;
 }
 
-bool usesMinimalHomeInteraction() { return isMinimalTheme() || isDashboardTheme(); }
+bool isBookshelfTheme() {
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::BOOKSHELF;
+}
+
+// Bookshelf reuses the Minimal home's menu, buttons and swipes; only the main
+// screen itself is different (HomeActivity::renderBookshelf()).
+bool usesMinimalHomeInteraction() { return isMinimalTheme() || isDashboardTheme() || isBookshelfTheme(); }
+
+// Height of the Bookshelf home's touch button bar (touch devices only; button
+// devices show the usual hints instead).
+constexpr int kBookshelfTouchBarHeight = 56;
+
+// The bookshelf's exact-size thumbnails: the current book's cover at the top,
+// the face-on books on the shelves.
+std::string bookshelfThumbPath(const std::string& bookPath, const bool header) {
+  if (!FsHelpers::hasEpubExtension(bookPath)) return {};
+  return Epub(bookPath, "/.crosspoint")
+      .getAdaptiveThumbBmpPath(header ? BookshelfHome::HEADER_COVER_W : BookshelfHome::FRONT_COVER_W,
+                               header ? BookshelfHome::HEADER_COVER_H : BookshelfHome::FRONT_COVER_H);
+}
 
 bool showMinimalHomeButtonHints(const MappedInputManager& mappedInput) { return !mappedInput.hasTouch(); }
 
@@ -704,6 +723,27 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       continue;
     }
     ensureReusableCoverPath(book);
+    if (isBookshelfTheme()) {
+      // The book at the top gets the big header cover; the next one stands
+      // face-on on the first shelf. EPUB only (exact-size adaptive thumbs).
+      const bool header = bookIdx == 0;
+      const std::string thumbPath = bookIdx <= 1 ? bookshelfThumbPath(book.path, header) : std::string{};
+      if (!book.coverBmpPath.empty() && !thumbPath.empty() && !Storage.exists(thumbPath.c_str())) {
+        Epub epub(book.path, "/.crosspoint");
+        showLoadingProgress(10 + progress * progressIncrement);
+        if (epub.load(true, true, Epub::XLocationLoadMode::Skip)) {
+          const bool success = epub.generateAdaptiveThumbBmp(
+              header ? BookshelfHome::HEADER_COVER_W : BookshelfHome::FRONT_COVER_W,
+              header ? BookshelfHome::HEADER_COVER_H : BookshelfHome::FRONT_COVER_H, &renderer,
+              SETTINGS.getReaderFontId());
+          if (!success && !epub.hasCoverImage()) markCoverMissing(book);
+        } else {
+          LOG_ERR("HOME", "bookshelf: failed to load EPUB cache for thumb generation: %s", book.path.c_str());
+        }
+      }
+      progress++;
+      continue;
+    }
     if (!book.coverBmpPath.empty()) {
       if (isCarouselTheme) {
         // For carousel: generate exact-size thumbnails for the center image rect and side slots.
@@ -1654,6 +1694,28 @@ void HomeActivity::loop() {
       return;
     }
 
+    if (isBookshelfTheme()) {
+      int tapX = 0;
+      int tapY = 0;
+      if (mappedInput.wasScreenTapped(tapX, tapY) && handleBookshelfTap(tapX, tapY)) return;
+      // Button readers: the side buttons walk through the books on the shelves
+      // (and back to none, i.e. the book at the top); Read opens the selection.
+      const int count = bookshelf_.selectableCount();
+      if (!mappedInput.hasTouch() && count > 0) {
+        const int selection = bookshelf_.selection();
+        if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+          bookshelf_.setSelection(selection + 1 >= count ? -1 : selection + 1);
+          requestUpdate();
+          return;
+        }
+        if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+          bookshelf_.setSelection(selection <= -1 ? count - 1 : selection - 1);
+          requestUpdate();
+          return;
+        }
+      }
+    }
+
     switch (mappedInput.wasSwipe()) {
       case MappedInputManager::SwipeDir::Down:
         minimalHomeNavIndex = 2;
@@ -1723,7 +1785,12 @@ void HomeActivity::loop() {
           onSettingsOpen();
           break;
         case 3:
-          onContinueReading();
+          if (const std::string* selected =
+                  isBookshelfTheme() ? bookshelf_.pathForSlot(bookshelf_.selection()) : nullptr) {
+            onSelectBook(*selected);
+          } else {
+            onContinueReading();
+          }
           break;
       }
     };
@@ -1773,7 +1840,7 @@ void HomeActivity::loop() {
       return;
     }
     if (releasedFrontButton == HalGPIO::BTN_RIGHT) {
-      if (!recentBooks.empty()) {
+      if (!recentBooks.empty() || (isBookshelfTheme() && bookshelf_.selection() >= 0)) {
         minimalHomeNavIndex = 3;
         activateMinimalHomeNav(minimalHomeNavIndex);
       }
@@ -2209,6 +2276,11 @@ void HomeActivity::render(RenderLock&&) {
       return;
     }
 
+    if (isBookshelfTheme()) {
+      renderBookshelf(pageWidth, pageHeight);
+      return;
+    }
+
     bool bufferRestored = coverBufferStored && restoreCoverBuffer();
     GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
 
@@ -2438,6 +2510,126 @@ void HomeActivity::updateSlidingWindowCache(int centerIdx, int bookCount) {
   (void)bookCount;
   // The current carousel cache keeps one frame in RAM; other frames are paged
   // from the SD snapshot cache on demand in render().
+}
+
+void HomeActivity::loadBookshelf() {
+  const std::string currentPath = recentBooks.empty() ? std::string{} : recentBooks[0].path;
+  std::vector<std::pair<std::string, std::string>> frontThumbs;
+  if (recentBooks.size() > 1) {
+    const std::string thumb = bookshelfThumbPath(recentBooks[1].path, false);
+    if (!thumb.empty() && Storage.exists(thumb.c_str())) frontThumbs.emplace_back(recentBooks[1].path, thumb);
+  }
+  bookshelf_.loadReadShelf(currentPath, frontThumbs);
+  bookshelf_.loadUnreadShelf(currentPath);
+  // One unread book stands face-on. Its cover thumbnail is generated once (it
+  // then stays in the book's cache), which also gives it its real title.
+  for (const std::string& path : bookshelf_.unreadFrontCandidates()) {
+    const std::string thumb = bookshelfThumbPath(path, false);
+    Epub epub(path, "/.crosspoint");
+    if (!epub.load(true, true, Epub::XLocationLoadMode::Skip)) continue;
+    const bool hasThumb = Storage.exists(thumb.c_str()) ||
+                          (epub.generateAdaptiveThumbBmp(BookshelfHome::FRONT_COVER_W, BookshelfHome::FRONT_COVER_H,
+                                                         &renderer, SETTINGS.getReaderFontId()) &&
+                           Storage.exists(thumb.c_str()));
+    LOG_INF("SHELF", "Face-on cover for %s: %s", path.c_str(), hasThumb ? "ok" : "unavailable");
+    if (!hasThumb) continue;
+    bookshelf_.setUnreadFront(path, thumb, epub.getTitle(), epub.getAuthor());
+    break;
+  }
+#if defined(CROSSINK_ENABLE_POKEMON)
+  // The party's first Pokemon stands on the top shelf, the second on the bottom one.
+  pokemon::PokemonSnapshot party;
+  if (pokemon::devicePokemonService().loadSnapshot(party) == pokemon::ServiceStatus::Ok) {
+    for (size_t shelf = 0; shelf < 2; ++shelf) {
+      bookshelf_.setBookend(shelf, shelf < party.partyCount ? party.party[shelf].speciesId : 0);
+    }
+  }
+#endif
+  bookshelfLoaded_ = true;
+}
+
+void HomeActivity::renderBookshelf(const int pageWidth, const int pageHeight) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
+  const bool touch = mappedInput.hasTouch();
+  const int footerHeight = touch ? kBookshelfTouchBarHeight : metrics.buttonHintsHeight;
+
+  BookshelfHome::CurrentBook current;
+  if (!recentBooks.empty()) {
+    current.book = &recentBooks[0];
+    current.coverThumbPath = bookshelfThumbPath(recentBooks[0].path, true);
+    current.stats = hasAnyBookStats(currentBookStats) ? &currentBookStats : nullptr;
+    current.globalStats = &globalStats;
+    current.progressPercent = currentBookProgressPercent;
+  }
+  bookshelf_.render(renderer,
+                    Rect{0, metrics.homeTopPadding, pageWidth, pageHeight - metrics.homeTopPadding - footerHeight - 4},
+                    current);
+
+  if (touch) {
+    // Menu / Browse / Settings, the same three places the Minimal home reaches.
+    const char* labels[] = {tr(STR_MENU), tr(STR_BROWSE), tr(STR_SETTINGS_SHORT)};
+    const int barY = pageHeight - footerHeight;
+    const int cellW = pageWidth / 3;
+    renderer.drawLine(0, barY, pageWidth, barY, 2, true);
+    for (int i = 0; i < 3; ++i) {
+      if (i > 0) renderer.drawLine(i * cellW, barY + 10, i * cellW, pageHeight - 10, true);
+      const int textW = renderer.getTextWidth(UI_10_FONT_ID, labels[i], EpdFontFamily::BOLD);
+      renderer.drawText(UI_10_FONT_ID, i * cellW + (cellW - textW) / 2,
+                        barY + (footerHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2, labels[i], true,
+                        EpdFontFamily::BOLD);
+    }
+  } else {
+    MinimalTheme::setHomeButtonHintSelection(minimalHomeNavIndex);
+    const bool canRead = !recentBooks.empty() || bookshelf_.selection() >= 0;
+    GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_BROWSE), tr(STR_SETTINGS_SHORT), canRead ? tr(STR_READ) : "");
+  }
+
+  renderer.displayBuffer(initialRefreshMode);
+  initialRefreshMode = HalDisplay::FAST_REFRESH;
+
+  if (!firstRenderDone) {
+    firstRenderDone = true;
+    requestUpdate();
+    return;
+  }
+  if (!recentsLoaded && !recentsLoading) {
+    recentsLoading = true;
+    loadRecentCovers(metrics.homeCoverHeight);
+  }
+  if (recentsLoaded && !bookshelfLoaded_) {
+    loadBookshelf();
+    requestUpdate();
+  }
+}
+
+bool HomeActivity::handleBookshelfTap(const int x, const int y) {
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  if (mappedInput.hasTouch() && y >= pageHeight - kBookshelfTouchBarHeight) {
+    const int cell = std::clamp(x * 3 / std::max(1, pageWidth), 0, 2);
+    if (cell == 0) {
+      minimalMenuOpen = true;
+      minimalMenuIndex = 0;
+      requestUpdate();
+    } else if (cell == 1) {
+      onFileBrowserOpen();
+    } else {
+      onSettingsOpen();
+    }
+    return true;
+  }
+  bool headerHit = false;
+  const int slot = bookshelf_.hitTest(x, y, headerHit);
+  if (const std::string* path = bookshelf_.pathForSlot(slot)) {
+    onSelectBook(*path);
+    return true;
+  }
+  if (headerHit && !recentBooks.empty()) {
+    onContinueReading();
+    return true;
+  }
+  return false;
 }
 
 void HomeActivity::onSelectBook(const std::string& path) {
