@@ -181,10 +181,14 @@ class PokemonActivity final : public Activity {
   int trainerCardCells(pokemon::PokemonUiRect* cells, int capacity, bool hallOfFame) const;
   void renderBagGrid();
   void renderPcOrderButtons();
-  // Bag item lists (Stones/Medicine/Balls/TM-HM, and Bag/Balls mid-battle) reserve
-  // a panel at the bottom: it describes the highlighted item, and selecting
-  // an item opens Use/Cancel buttons in it (see renderItemPanel()).
+  // Bag item lists (Stones/Medicine/Balls/TM-HM, and Bag/Balls mid-battle)
+  // and the move-replacement list reserve a panel at the bottom: it describes
+  // the highlighted entry, and selecting one opens Use/Cancel (Learn/Forget
+  // for moves) buttons in it (see renderItemPanel()). Moveset shows the same
+  // panel without buttons.
   bool showsItemPanel() const;
+  bool showsInfoPanel() const;
+  int infoPanelTextLines() const;
   bool itemPanelCanUse() const;
   int itemPanelButtonCount() const;
   int itemPanelHeight() const;
@@ -199,6 +203,10 @@ class PokemonActivity final : public Activity {
   bool isChoiceButtonScreen() const;
   int choiceColumns() const;
   Rect choiceCellRect(int index) const;
+  int choicePageSize() const;
+  int choicePageStart() const;
+  void movesetPickInfo(int index, const pokemon::BattleRecordEntry& entry, char* title, size_t titleSize, char* text,
+                       size_t textSize) const;
   void renderChoiceButtons();
   void moveChoiceSelection(MappedInputManager::Button direction);
   int buttonGridTop() const;
@@ -307,7 +315,7 @@ class PokemonActivity final : public Activity {
   // to free up; these screens' value slots aren't always free that way, so
   // they get this dedicated buffer.
   // Room for a translated item description (Bag rows), not just a short tag.
-  std::array<std::array<char, 128>, ROW_CAPACITY> subtitles_{};
+  std::array<std::array<char, 192>, ROW_CAPACITY> subtitles_{};
   bool itemPanelOpen_ = false;
   int itemPanelChoice_ = 0;
   Rect listBounds_{};

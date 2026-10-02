@@ -1,3 +1,12 @@
+## [1.6.0] - 2026-10-02
+
+### Changed
+
+- A Pokémon's Moves screen is now a 2×2 grid of move buttons, like the FIGHT menu: each shows the move's PP, type and power, and a panel at the bottom describes the highlighted move - type, power, accuracy, PP and its side effect.
+- Picking a move to learn into a slot is now a grid of move buttons too, with the same panel. Selecting a move asks Learn / Cancel before replacing anything; Forget asks Forget / Cancel and shows the move that would be forgotten. A long list of learnable moves pages like a list.
+- Choosing which move to teach a TM/HM over, or to use a PP Up or Ether on, is now a 2×2 grid of move buttons with a Cancel button underneath. The PP Up screen also shows how many PP Ups each move already has.
+- Move descriptions (here and on TM/HM in the Bag) now include side effects: the status a move inflicts and its chance (e.g. "Burns (10%)"), the stat it raises or lowers, and Haze's reset. Translated into all 28 languages.
+
 ## [1.5.0] - 2026-10-02
 
 ### Changed

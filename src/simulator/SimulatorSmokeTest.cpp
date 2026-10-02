@@ -1012,14 +1012,15 @@ class SimulatorSmokeTest {
   // Taps button `index` of the Bag item panel (PokemonActivity::
   // itemPanelButtonRect(): a panel pinned above the button hints, 10px
   // padding, 48px buttons with a 10px gap) - `count` is 2 for Use/Cancel,
-  // 1 for a lone OK.
-  void tapItemPanelButton(const int index, const int count) {
+  // 1 for a lone OK. `lines` is the panel's description height: 2 for most
+  // items, 3 for TM/HM and moves (PokemonActivity::infoPanelTextLines()).
+  void tapItemPanelButton(const int index, const int count, const int lines = 2) {
     const auto& metrics = UITheme::getInstance().getMetrics();
     constexpr int pad = 10;
     constexpr int gap = 10;
     constexpr int buttonHeight = 48;
     const int panelHeight = pad + renderer.getLineHeight(UI_12_FONT_ID) + 4 +
-                            2 * renderer.getLineHeight(UI_10_FONT_ID) + pad + buttonHeight + pad;
+                            lines * renderer.getLineHeight(UI_10_FONT_ID) + pad + buttonHeight + pad;
     const int panelY = renderer.getScreenHeight() - metrics.buttonHintsHeight - 8 - panelHeight;
     const int panelWidth = renderer.getScreenWidth() - 16;
     const int buttonWidth = (panelWidth - 2 * pad - gap * (count - 1)) / count;
@@ -1110,6 +1111,17 @@ class SimulatorSmokeTest {
     // so Moveset comes right after Summary).
     tapGrid(1);
     inputScript.push_back(render("Pokemon Moveset via touch", 4));
+    // Moveset is a 2x2 grid of move buttons; the first opens the replacement
+    // picker (also buttons), whose first button opens the info panel - Cancel
+    // closes it again.
+    tapGrid(0);
+    inputScript.push_back(render("Pokemon MovesetPick via touch", 4));
+    tapGrid(0);
+    inputScript.push_back(render("Pokemon MovesetPick Panel via touch", 4));
+    tapItemPanelButton(1, 2, 3);
+    inputScript.push_back(render("Pokemon MovesetPick Restored via touch", 4));
+    tapBack();
+    inputScript.push_back(render("Pokemon Moveset Restored via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Actions Restored 2 via touch", 4));
 

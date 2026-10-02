@@ -520,6 +520,46 @@ const char* statKindName(const pokemon::StatKind kind) {
   return "?";
 }
 
+// A move's type, power, accuracy and PP (`maxPp`, so PP Up boosts show), then
+// its side effect if it has one: the ailment it inflicts (with the chance, for
+// a damaging move), the stat stage it changes, or Haze's reset. Shared by the
+// TM/HM and moveset info panels.
+void moveInfoText(const pokemon::MoveData& move, const unsigned maxPp, char* buffer, const size_t size) {
+  char power[8] = "-";
+  char accuracy[8] = "-";
+  if (move.power != 0) snprintf(power, sizeof(power), "%u", move.power);
+  if (move.accuracy != 0) snprintf(accuracy, sizeof(accuracy), "%u%%", move.accuracy);
+  const int written =
+      snprintf(buffer, size, tr(STR_POKEMON_MACHINE_DESC), typeName(move.type), power, accuracy, maxPp);
+  if (written < 0 || static_cast<size_t>(written) >= size) return;
+
+  char effect[128] = "";
+  const char* ailment = nullptr;
+  switch (move.ailment) {
+    case pokemon::Ailment::Paralysis: ailment = tr(STR_POKEMON_MOVE_EFFECT_PARALYZE); break;
+    case pokemon::Ailment::Sleep: ailment = tr(STR_POKEMON_MOVE_EFFECT_SLEEP); break;
+    case pokemon::Ailment::Freeze: ailment = tr(STR_POKEMON_MOVE_EFFECT_FREEZE); break;
+    case pokemon::Ailment::Burn: ailment = tr(STR_POKEMON_MOVE_EFFECT_BURN); break;
+    case pokemon::Ailment::Poison: ailment = tr(STR_POKEMON_MOVE_EFFECT_POISON); break;
+    case pokemon::Ailment::Confusion: ailment = tr(STR_POKEMON_MOVE_EFFECT_CONFUSE); break;
+    default: break;
+  }
+  if (ailment != nullptr) {
+    // A chance of 0 means a status move that always inflicts it (if it hits).
+    if (move.ailmentChance > 0 && move.ailmentChance < 100)
+      snprintf(effect, sizeof(effect), "%s (%u%%)", ailment, move.ailmentChance);
+    else
+      snprintf(effect, sizeof(effect), "%s", ailment);
+  } else if (move.moveId == 114) {  // Haze - see resetBattleStages()
+    snprintf(effect, sizeof(effect), "%s", tr(STR_POKEMON_MOVE_EFFECT_HAZE));
+  } else if (const pokemon::StatChangeEffect* change = pokemon::statChangeForMove(move.moveId)) {
+    snprintf(effect, sizeof(effect),
+             change->stages > 0 ? tr(STR_POKEMON_MOVE_EFFECT_RAISE_SELF) : tr(STR_POKEMON_MOVE_EFFECT_LOWER_TARGET),
+             statKindName(change->stat), std::abs(static_cast<int>(change->stages)));
+  }
+  if (effect[0] != '\0') snprintf(buffer + written, size - static_cast<size_t>(written), " · %s", effect);
+}
+
 // A forced Struggle turn (moveSlot >= pokemon::BATTLE_MOVE_SLOTS - see
 // pokemon::STRUGGLE_MOVE_ID's doc comment) never touched a real slot in
 // `actor.moves`, so indexing that array directly would read out of bounds;
@@ -802,6 +842,11 @@ bool PokemonActivity::isChoiceButtonScreen() const {
     case Screen::Event:
     case Screen::Settings:
     case Screen::Actions:
+    case Screen::Moveset:
+    case Screen::MovesetPick:
+    case Screen::TmReplaceSlot:
+    case Screen::PpUpSlot:
+    case Screen::EtherSlot:
       return true;
     default:
       return false;
@@ -836,13 +881,58 @@ Rect PokemonActivity::choiceCellRect(const int index) const {
     top = renderer.getScreenHeight() - metrics.buttonHintsHeight - rows * MENU_GRID_ROW_HEIGHT - 8;
   }
   const int width = renderer.getScreenWidth() - 2 * margin;
-  const int row = index / columns;
+  const int local = index - choicePageStart();
+  const int row = local / columns;
   const bool spansRow = columns > 1 && index == count - 1 && count % columns != 0;
   const int buttonWidth = spansRow ? width : (width - gap * (columns - 1)) / columns;
-  const int x = margin + (spansRow ? 0 : (index % columns) * (buttonWidth + gap));
+  const int x = margin + (spansRow ? 0 : (local % columns) * (buttonWidth + gap));
   // Starter buttons are taller: each carries the Pokemon's picture.
   const int rowHeight = screen_ == Screen::Starter ? STARTER_BUTTON_ROW_HEIGHT : MENU_GRID_ROW_HEIGHT;
   return Rect{x, top + row * rowHeight, buttonWidth, rowHeight - 8};
+}
+
+// Screen::MovesetPick entry `index`: a learnable move's name and description,
+// or for the trailing "Forget" entry, the move it would forget. A newly
+// learned move keeps the slot's PP Up count (see learnMoveIntoSlot()), so the
+// PP shown is what it would actually get.
+void PokemonActivity::movesetPickInfo(const int index, const pokemon::BattleRecordEntry& entry, char* title,
+                                      const size_t titleSize, char* text, const size_t textSize) const {
+  if (titleSize > 0) title[0] = '\0';
+  if (textSize > 0) text[0] = '\0';
+  if (movesetSlot_ >= pokemon::BATTLE_MOVE_SLOTS) return;
+  const uint8_t level = pokemon::levelForXp(focusedRecord_.totalXp);
+  const size_t learnable = learnableMoveCount(focusedRecord_.speciesId, level, entry);
+  if (static_cast<size_t>(index) >= learnable) {
+    snprintf(title, titleSize, "%s", tr(STR_POKEMON_FORGET));
+    const pokemon::MoveData* current = pokemon::moveData(entry.moves[movesetSlot_]);
+    if (current != nullptr) {
+      char info[176];
+      moveInfoText(*current, pokemon::maxPpFor(current->pp, entry.ppUp[movesetSlot_]), info, sizeof(info));
+      snprintf(text, textSize, "%s: %s", current->name, info);
+    }
+    return;
+  }
+  const pokemon::MoveData* move =
+      pokemon::moveData(learnableMoveIdAt(focusedRecord_.speciesId, level, entry, static_cast<size_t>(index)));
+  if (move == nullptr) return;
+  snprintf(title, titleSize, "%s", move->name);
+  moveInfoText(*move, pokemon::maxPpFor(move->pp, entry.ppUp[movesetSlot_]), text, textSize);
+}
+
+// Choice screens show every button at once, except Screen::MovesetPick: a
+// high-level Pokemon can have more learnable moves than fit above the info
+// panel, so it pages (by whole rows) like a list.
+int PokemonActivity::choicePageSize() const {
+  const int count = logicalCount();
+  if (screen_ != Screen::MovesetPick) return count;
+  const int available = itemPanelRect().y - 8 - listTop();
+  const int rows = std::max(1, available / MENU_GRID_ROW_HEIGHT);
+  return rows * choiceColumns();
+}
+
+int PokemonActivity::choicePageStart() const {
+  const int size = choicePageSize();
+  return size <= 0 ? 0 : (selected_ / size) * size;
 }
 
 // Left/Right step through the buttons in reading order; Up/Down move by a
@@ -2920,6 +3010,18 @@ void PokemonActivity::loop() {
   const int count = logicalCount();
   if (count <= 0) return;
   if (showsItemPanel() && itemPanelOpen_) {
+    // A tap on another move button re-points the open panel at it.
+    if (isChoiceButtonScreen() && mappedInput.hasTouchHardware()) {
+      const int pageEnd = std::min(count, choicePageStart() + choicePageSize());
+      for (int index = choicePageStart(); index < pageEnd; ++index) {
+        const Rect cell = choiceCellRect(index);
+        if (mappedInput.wasTapInRect(cell.x, cell.y, cell.width, cell.height)) {
+          selected_ = index;
+          openItemPanel();
+          return;
+        }
+      }
+    }
     const int buttons = itemPanelButtonCount();
     for (const auto button : {MappedInputManager::Button::Right, MappedInputManager::Button::Left,
                               MappedInputManager::Button::Down, MappedInputManager::Button::Up}) {
@@ -2931,8 +3033,21 @@ void PokemonActivity::loop() {
     return;
   }
   if (isChoiceButtonScreen()) {
+    const int pageSize = choicePageSize();
+    if (pageSize < count) {
+      // Paged (MovesetPick): swipe up/down turns the page, as on a list.
+      const auto swipe = mappedInput.wasSwipe();
+      if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+        selected_ = swipe == MappedInputManager::SwipeDir::Up
+                        ? ButtonNavigator::nextPageIndex(selected_, count, pageSize)
+                        : ButtonNavigator::previousPageIndex(selected_, count, pageSize);
+        requestUpdate();
+        return;
+      }
+    }
     if (mappedInput.hasTouchHardware()) {
-      for (int index = 0; index < count; ++index) {
+      const int pageEnd = std::min(count, choicePageStart() + pageSize);
+      for (int index = choicePageStart(); index < pageEnd; ++index) {
         const Rect cell = choiceCellRect(index);
         if (mappedInput.wasTapInRect(cell.x, cell.y, cell.width, cell.height)) {
           selected_ = index;
@@ -3279,21 +3394,12 @@ void PokemonActivity::buildRows() {
         row(local, move == nullptr ? "-" : move->name, value);
         break;
       }
-      case Screen::MovesetPick: {
+      case Screen::MovesetPick:
         if (focusedRecord_.recordId == 0) break;
-        const pokemon::BattleRecordEntry& entry = focusedEntry;
-        const size_t learnable =
-            learnableMoveCount(focusedRecord_.speciesId, pokemon::levelForXp(focusedRecord_.totalXp), entry);
-        if (static_cast<size_t>(index) >= learnable) {
-          row(local, tr(STR_POKEMON_FORGET));
-          break;
-        }
-        const uint8_t moveId = learnableMoveIdAt(focusedRecord_.speciesId, pokemon::levelForXp(focusedRecord_.totalXp),
-                                                 entry, static_cast<size_t>(index));
-        const pokemon::MoveData* move = pokemon::moveData(moveId);
-        row(local, move == nullptr ? "?" : move->name);
+        row(local, "");
+        movesetPickInfo(index, focusedEntry, labels_[local].data(), labels_[local].size(), subtitles_[local].data(),
+                        subtitles_[local].size());
         break;
-      }
       case Screen::TmReplaceSlot: {
         if (index >= static_cast<int>(pokemon::BATTLE_MOVE_SLOTS)) {
           row(local, tr(STR_POKEMON_CANCEL));
@@ -3454,14 +3560,7 @@ void PokemonActivity::buildRows() {
         snprintf(label, sizeof(label), "%s %s", data == nullptr ? "?" : data->name, move == nullptr ? "?" : move->name);
         row(local, label);
         snprintf(values_[local].data(), values_[local].size(), "%s", count);
-        if (move != nullptr) {
-          char power[8] = "-";
-          char accuracy[8] = "-";
-          if (move->power != 0) snprintf(power, sizeof(power), "%u", move->power);
-          if (move->accuracy != 0) snprintf(accuracy, sizeof(accuracy), "%u%%", move->accuracy);
-          snprintf(subtitles_[local].data(), subtitles_[local].size(), tr(STR_POKEMON_MACHINE_DESC),
-                   typeName(move->type), power, accuracy, move->pp);
-        }
+        if (move != nullptr) moveInfoText(*move, move->pp, subtitles_[local].data(), subtitles_[local].size());
         break;
       }
       case Screen::Pokedex: {
@@ -4595,11 +4694,23 @@ void PokemonActivity::renderChoiceButtons() {
       learnerMoves = service_.peekBattleMoves(record);
     }
   }
+  // The four move-slot screens: the focused Pokemon's moves as move buttons
+  // (plus Cancel on the slot pickers, see the label switch below).
+  const bool slotScreen = screen_ == Screen::Moveset || screen_ == Screen::TmReplaceSlot ||
+                          screen_ == Screen::PpUpSlot || screen_ == Screen::EtherSlot;
+  const bool movesetPick = screen_ == Screen::MovesetPick;
+  const pokemon::BattleRecordEntry slotMoves = (slotScreen || movesetPick) && focusedRecord_.recordId != 0
+                                                   ? service_.peekBattleMoves(focusedRecord_)
+                                                   : pokemon::BattleRecordEntry{};
   const auto actions = screen_ == Screen::Actions ? pokemon::collectionActions(actionSource_ == Screen::Party,
                                                                                snapshot_.partyCount, canEvolveFocused())
                                                   : pokemon::CollectionActionSet{};
 
-  for (int index = 0; index < count; ++index) {
+  const size_t learnable =
+      movesetPick ? learnableMoveCount(focusedRecord_.speciesId, pokemon::levelForXp(focusedRecord_.totalXp), slotMoves)
+                  : 0;
+  const int pageEnd = std::min(count, choicePageStart() + choicePageSize());
+  for (int index = choicePageStart(); index < pageEnd; ++index) {
     const Rect cell = choiceCellRect(index);
     const bool selected = index == selected_;
     if (screen_ == Screen::Starter) {
@@ -4622,6 +4733,30 @@ void PokemonActivity::renderChoiceButtons() {
       renderer.drawRoundedRect(cell.x, cell.y, cell.width, cell.height, 2, 6, true);
     }
     const bool black = !selected;
+
+    if (slotScreen && index < static_cast<int>(pokemon::BATTLE_MOVE_SLOTS)) {
+      const pokemon::MoveData* move = pokemon::moveData(slotMoves.moves[index]);
+      char pp[24] = "";
+      if (move != nullptr) {
+        const unsigned maxPp = pokemon::maxPpFor(move->pp, slotMoves.ppUp[index]);
+        // PP Up can be used at most 3 times per slot, so show how many so far.
+        if (screen_ == Screen::PpUpSlot && slotMoves.ppUp[index] > 0)
+          snprintf(pp, sizeof(pp), "%u/%u +%u", slotMoves.pp[index], maxPp, slotMoves.ppUp[index]);
+        else
+          snprintf(pp, sizeof(pp), "%u/%u", slotMoves.pp[index], maxPp);
+      }
+      drawMoveButtonContent(renderer, cell, black, move, pp, nullptr);
+      continue;
+    }
+
+    if (movesetPick && static_cast<size_t>(index) < learnable && movesetSlot_ < pokemon::BATTLE_MOVE_SLOTS) {
+      const pokemon::MoveData* move = pokemon::moveData(learnableMoveIdAt(
+          focusedRecord_.speciesId, pokemon::levelForXp(focusedRecord_.totalXp), slotMoves, static_cast<size_t>(index)));
+      char pp[16] = "";
+      if (move != nullptr) snprintf(pp, sizeof(pp), "PP %u", pokemon::maxPpFor(move->pp, slotMoves.ppUp[movesetSlot_]));
+      drawMoveButtonContent(renderer, cell, black, move, pp, nullptr);
+      continue;
+    }
 
     if (moveLearn && index < static_cast<int>(pokemon::BATTLE_MOVE_SLOTS)) {
       const pokemon::MoveData* move = pokemon::moveData(learnerMoves.moves[index]);
@@ -4656,6 +4791,14 @@ void PokemonActivity::renderChoiceButtons() {
         break;
       case Screen::Actions:
         label = index < actions.count ? collectionActionLabel(actions.items[index]) : "";
+        break;
+      case Screen::TmReplaceSlot:
+      case Screen::PpUpSlot:
+      case Screen::EtherSlot:
+        label = tr(STR_POKEMON_CANCEL);
+        break;
+      case Screen::MovesetPick:
+        label = tr(STR_POKEMON_FORGET);
         break;
       case Screen::Event:
         if (pending == nullptr) {
@@ -5065,7 +5208,19 @@ void PokemonActivity::renderRowArt() {
 // other read-only HP peek in this file (Summary, usablePartySlotAt()).
 bool PokemonActivity::showsItemPanel() const {
   return screen_ == Screen::BagEvolution || screen_ == Screen::BagMedicine || screen_ == Screen::BagBalls ||
-         screen_ == Screen::BagMachine || screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls;
+         screen_ == Screen::BagMachine || screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls ||
+         screen_ == Screen::MovesetPick;
+}
+
+// Moveset (a button grid, not a list) shows the same panel as a read-only
+// description of the highlighted move - no Use/Cancel step, selecting a move
+// goes straight to picking its replacement.
+bool PokemonActivity::showsInfoPanel() const { return showsItemPanel() || screen_ == Screen::Moveset; }
+
+// Move descriptions carry a side effect and can run a line longer than an
+// item's.
+int PokemonActivity::infoPanelTextLines() const {
+  return screen_ == Screen::Moveset || screen_ == Screen::MovesetPick || screen_ == Screen::BagMachine ? 3 : 2;
 }
 
 // Whether the highlighted item does anything from this screen: balls only
@@ -5090,8 +5245,10 @@ int PokemonActivity::itemPanelButtonCount() const { return itemPanelCanUse() ? 2
 int PokemonActivity::itemPanelHeight() const {
   constexpr int pad = 10;
   constexpr int buttonHeight = 48;
-  return pad + renderer.getLineHeight(UI_12_FONT_ID) + 4 + 2 * renderer.getLineHeight(UI_10_FONT_ID) + pad +
-         buttonHeight + pad;
+  // Moveset never opens buttons, so it doesn't reserve room for them.
+  const int buttons = screen_ == Screen::Moveset ? 0 : buttonHeight + pad;
+  return pad + renderer.getLineHeight(UI_12_FONT_ID) + 4 + infoPanelTextLines() * renderer.getLineHeight(UI_10_FONT_ID) +
+         pad + buttons;
 }
 
 // Pinned just above the button hints; rowsPerPage() keeps the list clear of it.
@@ -5129,8 +5286,25 @@ void PokemonActivity::closeItemPanel() {
 // The highlighted item's name and description (word-wrapped, at most two
 // lines); once the item is selected, Use/Cancel (or OK) buttons underneath.
 void PokemonActivity::renderItemPanel() {
-  const int local = selected_ - pageStart();
-  if (local < 0 || local >= rowCount_) return;
+  char title[48] = "";
+  char text[192] = "";
+  if (screen_ == Screen::Moveset) {
+    if (focusedRecord_.recordId == 0 || selected_ < 0 || selected_ >= static_cast<int>(pokemon::BATTLE_MOVE_SLOTS))
+      return;
+    const pokemon::BattleRecordEntry entry = service_.peekBattleMoves(focusedRecord_);
+    const pokemon::MoveData* move = pokemon::moveData(entry.moves[selected_]);
+    if (move == nullptr) return;
+    snprintf(title, sizeof(title), "%s", move->name);
+    moveInfoText(*move, pokemon::maxPpFor(move->pp, entry.ppUp[selected_]), text, sizeof(text));
+  } else if (screen_ == Screen::MovesetPick) {
+    if (focusedRecord_.recordId == 0) return;
+    movesetPickInfo(selected_, service_.peekBattleMoves(focusedRecord_), title, sizeof(title), text, sizeof(text));
+  } else {
+    const int local = selected_ - pageStart();
+    if (local < 0 || local >= rowCount_) return;
+    snprintf(title, sizeof(title), "%s", labels_[local].data());
+    snprintf(text, sizeof(text), "%s", subtitles_[local].data());
+  }
   const Rect panel = itemPanelRect();
   renderer.fillRect(panel.x, panel.y, panel.width, panel.height, false);
   renderer.drawRoundedRect(panel.x, panel.y, panel.width, panel.height, 2, 6, true);
@@ -5139,40 +5313,52 @@ void PokemonActivity::renderItemPanel() {
   const int textX = panel.x + pad;
   const int maxWidth = panel.width - 2 * pad;
   int y = panel.y + pad;
-  const std::string name = renderer.truncatedText(UI_12_FONT_ID, labels_[local].data(), maxWidth, EpdFontFamily::BOLD);
+  const std::string name = renderer.truncatedText(UI_12_FONT_ID, title, maxWidth, EpdFontFamily::BOLD);
   renderer.drawText(UI_12_FONT_ID, textX, y, name.c_str(), true, EpdFontFamily::BOLD);
   y += renderer.getLineHeight(UI_12_FONT_ID) + 4;
 
-  // Greedy word wrap: the first line takes as many words as fit, the second
-  // gets the rest (ellipsized if it still doesn't fit).
-  const char* text = subtitles_[local].data();
+  // Greedy word wrap: each line takes as many words as fit; the last allowed
+  // line gets whatever is left (ellipsized if it still doesn't fit).
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  if (renderer.getTextWidth(UI_10_FONT_ID, text) <= maxWidth) {
-    renderer.drawText(UI_10_FONT_ID, textX, y, text);
-  } else {
+  const char* rest = text;
+  for (int line = 0; line < infoPanelTextLines() && *rest != '\0'; ++line, y += lineHeight) {
+    const bool last = line == infoPanelTextLines() - 1;
+    if (last || renderer.getTextWidth(UI_10_FONT_ID, rest) <= maxWidth) {
+      const std::string clipped = renderer.truncatedText(UI_10_FONT_ID, rest, maxWidth);
+      renderer.drawText(UI_10_FONT_ID, textX, y, clipped.c_str());
+      break;
+    }
     const char* split = nullptr;
-    for (const char* space = strchr(text, ' '); space != nullptr; space = strchr(space + 1, ' ')) {
-      char head[128];
-      snprintf(head, sizeof(head), "%.*s", static_cast<int>(space - text), text);
+    for (const char* space = strchr(rest, ' '); space != nullptr; space = strchr(space + 1, ' ')) {
+      char head[192];
+      snprintf(head, sizeof(head), "%.*s", static_cast<int>(space - rest), rest);
       if (renderer.getTextWidth(UI_10_FONT_ID, head) > maxWidth) break;
       split = space;
     }
-    if (split == nullptr) {
-      const std::string clipped = renderer.truncatedText(UI_10_FONT_ID, text, maxWidth);
+    if (split == nullptr) {  // one word wider than the panel
+      const std::string clipped = renderer.truncatedText(UI_10_FONT_ID, rest, maxWidth);
       renderer.drawText(UI_10_FONT_ID, textX, y, clipped.c_str());
-    } else {
-      char head[128];
-      snprintf(head, sizeof(head), "%.*s", static_cast<int>(split - text), text);
-      renderer.drawText(UI_10_FONT_ID, textX, y, head);
-      const std::string rest = renderer.truncatedText(UI_10_FONT_ID, split + 1, maxWidth);
-      renderer.drawText(UI_10_FONT_ID, textX, y + lineHeight, rest.c_str());
+      break;
     }
+    char head[192];
+    snprintf(head, sizeof(head), "%.*s", static_cast<int>(split - rest), rest);
+    renderer.drawText(UI_10_FONT_ID, textX, y, head);
+    rest = split + 1;
   }
 
-  if (!itemPanelOpen_) return;
+  if (!itemPanelOpen_ || !showsItemPanel()) return;
   const bool canUse = itemPanelCanUse();
   for (int index = 0; index < itemPanelButtonCount(); ++index) {
-    const char* label = !canUse ? tr(STR_OK) : index == 0 ? tr(STR_POKEMON_USE) : tr(STR_POKEMON_CANCEL);
+    const char* label = tr(STR_POKEMON_CANCEL);
+    if (!canUse) {
+      label = tr(STR_OK);
+    } else if (index == 0) {
+      label = tr(STR_POKEMON_USE);
+      if (screen_ == Screen::MovesetPick) {
+        // The trailing row forgets the slot's move instead of learning one.
+        label = selected_ == logicalCount() - 1 ? tr(STR_POKEMON_FORGET) : tr(STR_POKEMON_LEARN);
+      }
+    }
     drawGridButton(itemPanelButtonRect(index), index == itemPanelChoice_, label);
   }
 }
@@ -5399,7 +5585,7 @@ void PokemonActivity::render(RenderLock&&) {
   renderFocused();
   if (isChoiceButtonScreen()) renderChoiceButtons();
   renderRowArt();
-  if (showsItemPanel()) renderItemPanel();
+  if (showsInfoPanel()) renderItemPanel();
   renderer.displayBuffer(cleanRefreshNeeded_ ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
   cleanRefreshNeeded_ = false;
 }
