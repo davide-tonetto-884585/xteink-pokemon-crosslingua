@@ -12,8 +12,9 @@ in one build:
   [ed-fruty/crosslingua-reader](https://github.com/ed-fruty/crosslingua-reader) -
   translate an EPUB on the device and read it in eight bilingual display modes.
 
-On top of that, this repository adds features of its own, such as transferring a
-Pokémon save between two nearby readers. See [What's new in this fork](#whats-new-in-this-fork).
+On top of that, this repository adds features of its own - a Bookshelf home that shows
+your library as a bookcase, and syncing your Pokémon save, reading stats and book
+position with a nearby reader in one go. See [What's new in this fork](#whats-new-in-this-fork).
 
 ## Projects this is built from
 
@@ -26,6 +27,28 @@ Pokémon save between two nearby readers. See [What's new in this fork](#whats-n
 | [padge01/xteink-pokemon-game](https://github.com/padge01/xteink-pokemon-game) | The original idea of a reading-powered Pokémon companion. |
 
 ## What's new in this fork
+
+### Bookshelf home
+
+<img src="docs/screenshots/bookshelf-home.png" height="500" alt="Bookshelf home" align="right" />
+
+A Home screen style that turns your library into a bookcase, over a celestial wallpaper
+of moons, stars and constellations (**Settings → Display → UI Theme → Bookshelf**):
+
+- **The book you are reading** at the top, in a compact panel: cover, title, author and
+  CrossInk's reading stats for it - reading time, time left, progress, pages per minute,
+  daily average, start date, estimated finish date and sessions.
+- **A shelf of the books you have read** and **a shelf of random books from your SD card
+  you have not opened yet** - mostly standing spine-out with the title along the spine,
+  each with its own height, thickness and binding, a few face-on with their cover. A
+  ribbon marks a book in progress, a tick a finished one.
+- **Your Pokémon on the shelves**: the first two Pokémon of your party sit among the
+  books, cut out of their Pokédex cards.
+- Tap a book (X4 Pro), or frame it with the side buttons and press Read (X3/X4), to open it.
+
+Full guide: [Bookshelf Home](docs/bookshelf-home.md).
+
+<br clear="right" />
 
 ### Bilingual reading (Lingua)
 
