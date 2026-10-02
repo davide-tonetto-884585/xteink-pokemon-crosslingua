@@ -11,9 +11,15 @@ to another nearby. Like [Nearby File Transfer](nearby-file-transfer.md) it uses
 ESP-NOW, so no Wi-Fi network, internet connection or computer is needed. It
 works between any two supported devices (X3, X4, X4 Pro).
 
+To sync your reading stats and book position at the same time, use
+[Sync with Nearby Reader](nearby-sync.md) from the File Transfer menu instead -
+it sends the Pokémon save too.
+
 ## Requirements
 
 - Both readers run Pokémon firmware with this feature, and are close together.
+- Both readers need firmware newer than v1.7.0, or both exactly v1.7.0 (the
+  transfer protocol changed after v1.7.0).
 - The receiving reader's firmware must be the same version as the sender's or
   newer. A save from newer firmware is refused (with a message) instead of
   being loaded by firmware that does not understand it.

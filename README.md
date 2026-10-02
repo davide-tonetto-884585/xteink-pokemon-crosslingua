@@ -56,6 +56,13 @@ or computer needed, and it works between X3, X4 and X4 Pro.
 
 Full guide: [Pokémon Save Transfer](docs/pokemon-save-transfer.md).
 
+### Sync everything with one button
+
+**File Transfer → Sync with Nearby Reader** syncs the Pokémon save, the reading stats
+(both ways) and the position in the book you last had open, in a single ESP-NOW transfer.
+The book position lands on the same text even if the other reader lays the book out
+differently. Full guide: [Sync with Nearby Reader](docs/nearby-sync.md).
+
 ### Updates from this repository
 
 The in-app Wi-Fi **Check for Update** looks for new versions in this repository's
