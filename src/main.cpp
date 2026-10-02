@@ -1520,7 +1520,12 @@ void setup() {
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
     // crashed (indicated by readerActivityLoadCount > 0)
-    activityManager.goHome();
+    // X3's fast refresh is differential: drawn over the retained sleep image it
+    // leaves parts of that image visible on Home. Clean it with the same full
+    // refresh the silent-restart path above already uses on X3. (X4 clears its
+    // wake ghosting separately, in the SplashlessWake case.)
+    activityManager.goHome(HomeMenuItem::NONE,
+                           gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
     const auto path = APP_STATE.openEpubPath;
