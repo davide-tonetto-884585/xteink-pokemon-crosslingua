@@ -1,3 +1,14 @@
+## [1.7.0] - 2026-10-02
+
+### Added
+
+- CrossLingua bilingual reading (Lingua): translate a chapter or a whole EPUB on the device, or use translations already embedded by a Calibre workflow, and read it in eight display modes - Normal, Interleaved, Side by Side, Original Only, Translation Only, Tooltip, Page Translation and Interlinear - switching between them without re-translating. A network connection is only needed while translating. See [docs/lingua.md](docs/lingua.md).
+- Pokémon Save Transfer: send your whole Pokémon game to another nearby reader over ESP-NOW, with no Wi-Fi network needed (Pokémon > Settings > Send Save / Receive Save; a reader with no game yet can receive from the starter screen). Choose **Copy** to keep the save on both readers or **Move** to hand it over. The receiver sees a summary of the save and must accept it; every file is checksummed, the save is only committed once fully verified, installing it survives a power cut, and any save that gets replaced is kept in `/.crosspoint/pokemon-backup/`. A save from newer firmware is refused instead of loaded. See [docs/pokemon-save-transfer.md](docs/pokemon-save-transfer.md). English and Italian only for now; other languages show English.
+
+### Changed
+
+- Wi-Fi "Check for Update" now looks for updates in this firmware's own releases (davide-tonetto-884585/xteink-pokemon-crosslingua) instead of the original Pokémon firmware's, so updating no longer replaces CrossLingua and save transfer with a build that lacks them.
+
 ## [1.6.0] - 2026-10-02
 
 ### Changed
