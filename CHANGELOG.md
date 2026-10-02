@@ -1,3 +1,9 @@
+## [1.9.1] - 2026-10-03
+
+### Fixed
+
+- Bookshelf home: the shelves showed files that are not books (readmes, notes and other `.txt` files from the SD card). They now show only e-books: EPUB and XTC/XTCH files. TXT files still open from the file browser.
+
 ## [1.9.0] - 2026-10-02
 
 ### Added
