@@ -68,9 +68,12 @@ uint32_t nextRandom(uint32_t& state) {
   return state;
 }
 
-bool isBookFile(const char* name) {
-  const std::string_view view(name);
-  return FsHelpers::hasEpubExtension(view) || FsHelpers::hasXtcExtension(view) || FsHelpers::hasTxtExtension(view);
+// Only real e-books stand on the shelves: EPUB and XTC/XTCH. Plain .txt/.md
+// files are left out - on an SD card they are mostly notes, readmes and
+// licences - and formats the reader cannot open (MOBI, AZW3, PDF...) would be
+// books you could not pick up.
+bool isBookFile(std::string_view name) {
+  return FsHelpers::hasEpubExtension(name) || FsHelpers::hasXtcExtension(name);
 }
 
 bool hasStartedReading(const std::string& path) {
@@ -185,7 +188,7 @@ void BookshelfHome::loadReadShelf(const std::string& currentPath,
   read_.clear();
   for (const RecentBook& recent : RECENT_BOOKS.getBooks()) {
     if (read_.size() >= MAX_READ_BOOKS) break;
-    if (recent.path == currentPath || !Storage.exists(recent.path.c_str())) continue;
+    if (recent.path == currentPath || !isBookFile(recent.path) || !Storage.exists(recent.path.c_str())) continue;
     Book book;
     book.path = recent.path;
     book.title = recent.title.empty() ? bookshelf::titleFromFileName(recent.path.c_str()) : recent.title;
