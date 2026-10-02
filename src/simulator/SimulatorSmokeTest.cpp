@@ -23,6 +23,7 @@
 #include "activities/settings/QuickActionsActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 #include "simulator/SimulatorHomeKeyInput.h"
 #if defined(CROSSINK_ENABLE_POKEMON)
 #include <Memory.h>
@@ -1008,6 +1009,26 @@ class SimulatorSmokeTest {
   // Screen() do, from the same public metrics) instead of Down+Confirm, and
   // leaves screens via a tap on the header's Back button instead of the
   // physical Back button.
+  // Taps button `index` of the Bag item panel (PokemonActivity::
+  // itemPanelButtonRect(): a panel pinned above the button hints, 10px
+  // padding, 48px buttons with a 10px gap) - `count` is 2 for Use/Cancel,
+  // 1 for a lone OK.
+  void tapItemPanelButton(const int index, const int count) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    constexpr int pad = 10;
+    constexpr int gap = 10;
+    constexpr int buttonHeight = 48;
+    const int panelHeight = pad + renderer.getLineHeight(UI_12_FONT_ID) + 4 +
+                            2 * renderer.getLineHeight(UI_10_FONT_ID) + pad + buttonHeight + pad;
+    const int panelY = renderer.getScreenHeight() - metrics.buttonHintsHeight - 8 - panelHeight;
+    const int panelWidth = renderer.getScreenWidth() - 16;
+    const int buttonWidth = (panelWidth - 2 * pad - gap * (count - 1)) / count;
+    const int x = 8 + pad + index * (buttonWidth + gap) + buttonWidth / 2;
+    const int y = panelY + panelHeight - pad - buttonHeight / 2;
+    inputScript.push_back(touchDown(x, y));
+    inputScript.push_back(touchRelease(x, y));
+  }
+
   void buildPokemonTouchInputScript() {
     inputScript.clear();
     scriptIndex = 0;
@@ -1052,11 +1073,6 @@ class SimulatorSmokeTest {
       inputScript.push_back(touchDown(backX, backY));
       inputScript.push_back(touchRelease(backX, backY));
     };
-    // Screen::Message (e.g. the BagBalls info popup below) has no header
-    // Back button of its own reason to leave via - it's dismissed by tapping
-    // the message body itself (wasScreenTapped() in loop()), so use a plain
-    // center-of-screen tap for those instead of tapBack().
-    const int centerY = renderer.getScreenHeight() / 2;
     // The Pokemon menu and the Bag category picker are 2-column button grids
     // (PokemonActivity::buttonGridCellRect(): 8px margin/gap, 64px rows,
     // starting at the same top as a list), not list rows.
@@ -1070,10 +1086,6 @@ class SimulatorSmokeTest {
       const int y = listTop + (index / columns) * rowHeight + (rowHeight - 8) / 2;
       inputScript.push_back(touchDown(x, y));
       inputScript.push_back(touchRelease(x, y));
-    };
-    const auto tapCenter = [&] {
-      inputScript.push_back(touchDown(centerX, centerY));
-      inputScript.push_back(touchRelease(centerX, centerY));
     };
 
     // Menu cell 0 = Party.
@@ -1150,15 +1162,13 @@ class SimulatorSmokeTest {
     inputScript.push_back(render("Pokemon Bag Restored 2 via touch", 4));
 
     // Row 2 = Balls - createStarter() grants 10 Poke Balls, so this is
-    // non-empty; tapping the one owned row opens a view-only info message
-    // (Screen::Message) instead of doing anything, which doubles as
-    // coverage for the Message tap-to-dismiss path added alongside the
-    // Battle grid touch support.
+    // non-empty; tapping the one owned row opens the item panel, which for
+    // a ball outside battle only offers OK (it can't be used here).
     tapGrid(2);
     inputScript.push_back(render("Pokemon Bag Balls via touch", 4));
     tapRow(0, 64);
-    inputScript.push_back(render("Pokemon Bag Balls Info via touch", 4));
-    tapCenter();
+    inputScript.push_back(render("Pokemon Bag Balls Panel via touch", 4));
+    tapItemPanelButton(0, 1);
     inputScript.push_back(render("Pokemon Bag Balls Restored via touch", 4));
     tapBack();
     inputScript.push_back(render("Pokemon Bag Restored 3 via touch", 4));
@@ -1276,6 +1286,8 @@ class SimulatorSmokeTest {
     tapBattleGrid(2, 5);
     inputScript.push_back(render("Pokemon BattleBag via touch", 4));
     tapListRow(0, listRowHeight);
+    inputScript.push_back(render("Pokemon BattleBag Panel via touch", 4));
+    tapItemPanelButton(0, 2);  // Use
     inputScript.push_back(render("Pokemon ItemTarget via touch", 4));
     tapListRow(0, 96);  // ItemTarget shows HP rows (96px) for a Medicine item.
     inputScript.push_back(render("Pokemon Battle Restored 2 via touch", 4));

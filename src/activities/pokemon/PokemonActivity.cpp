@@ -768,6 +768,8 @@ void PokemonActivity::setScreen(const Screen screen, const int selected) {
       pokemon::pokemonNeedsCleanRefresh(screen_ == Screen::PokedexDetail, screen == Screen::PokedexDetail, false);
   screen_ = screen;
   selected_ = std::max(0, selected);
+  itemPanelOpen_ = false;
+  itemPanelChoice_ = 0;
   uiReady_ = false;
   app_.setScreen(&PokemonActivity::screenBuilder, this);
   requestUpdate();
@@ -1018,7 +1020,8 @@ int PokemonActivity::rowHeightForScreen() const {
 
 int PokemonActivity::rowsPerPage() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int bottomReserve = metrics.buttonHintsHeight + 8;
+  int bottomReserve = metrics.buttonHintsHeight + 8;
+  if (showsItemPanel()) bottomReserve += itemPanelHeight() + 8;
   return pokemon::pokemonRowsPerPage(renderer.getScreenHeight(), listTop(), bottomReserve, rowHeightForScreen(),
                                      ROW_CAPACITY);
 }
@@ -1907,6 +1910,15 @@ void PokemonActivity::buildBattleLog(const pokemon::BattleTurnResult& result) {
 }
 
 void PokemonActivity::activate() {
+  if (showsItemPanel()) {
+    if (!itemPanelOpen_) {
+      openItemPanel();
+      return;
+    }
+    const bool use = itemPanelChoice_ == 0 && itemPanelCanUse();
+    closeItemPanel();
+    if (!use) return;
+  }
   switch (screen_) {
     case Screen::Starter:
       starterSpecies_ = STARTERS[selected_];
@@ -2724,6 +2736,10 @@ void PokemonActivity::activate() {
 }
 
 void PokemonActivity::goBack() {
+  if (showsItemPanel() && itemPanelOpen_) {
+    closeItemPanel();
+    return;
+  }
   switch (screen_) {
     case Screen::Starter:
     case Screen::Menu:
@@ -2844,6 +2860,22 @@ void PokemonActivity::loop() {
     goBack();
     return;
   }
+  if (showsItemPanel() && itemPanelOpen_) {
+    // The panel's buttons sit outside the list, so the list's own touch
+    // routing never sees them; a tap on another row still goes through it
+    // (onRow() re-points the open panel at that item).
+    const int buttons = itemPanelButtonCount();
+    if (mappedInput.hasTouchHardware()) {
+      for (int index = 0; index < buttons; ++index) {
+        const Rect cell = itemPanelButtonRect(index);
+        if (mappedInput.wasTapInRect(cell.x, cell.y, cell.width, cell.height)) {
+          itemPanelChoice_ = index;
+          activate();
+          return;
+        }
+      }
+    }
+  }
   if (uiReady_) {
     const auto snap = touchSnapshotFrom(mappedInput);
     if (snap.touchPressed || snap.touchReleased) {
@@ -2887,6 +2919,17 @@ void PokemonActivity::loop() {
   }
   const int count = logicalCount();
   if (count <= 0) return;
+  if (showsItemPanel() && itemPanelOpen_) {
+    const int buttons = itemPanelButtonCount();
+    for (const auto button : {MappedInputManager::Button::Right, MappedInputManager::Button::Left,
+                              MappedInputManager::Button::Down, MappedInputManager::Button::Up}) {
+      navigator_.onPressAndContinuous({button}, [this, buttons] {
+        itemPanelChoice_ = (itemPanelChoice_ + 1) % buttons;
+        requestUpdate();
+      });
+    }
+    return;
+  }
   if (isChoiceButtonScreen()) {
     if (mappedInput.hasTouchHardware()) {
       for (int index = 0; index < count; ++index) {
@@ -3105,6 +3148,10 @@ void PokemonActivity::onRow(const fui::ActionEvent& event, void* user) {
   if (event.value < 0 || event.value >= self->logicalCount()) return;
   self->selected_ = event.value;
   self->app_.clearTapFlash();
+  if (self->showsItemPanel()) {
+    self->openItemPanel();
+    return;
+  }
   self->activate();
 }
 
@@ -3114,7 +3161,6 @@ void PokemonActivity::buildRows() {
     labels_[i].fill('\0');
     values_[i].fill('\0');
     subtitles_[i].fill('\0');
-    itemRowNames_[i].fill('\0');
   }
   const int start = pageStart();
   const int total = logicalCount();
@@ -3126,15 +3172,14 @@ void PokemonActivity::buildRows() {
     rows_[local].value = value == nullptr ? nullptr : values_[local].data();
     rows_[local].actionValue = static_cast<int16_t>(start + local);
   };
-  // Bag rows: name + count on the first line, what the item does underneath.
-  // The list's own label/subtitle slots are confined to the band between its
-  // symmetric 112px artwork paddings (~290px), too narrow for a translated
-  // description, so the row is registered empty (touch/selection still work)
-  // and renderItemRowText() draws all three out to the right edge instead.
+  // Bag rows: the name is the list's label; the count is kept out of the
+  // list's value slot (which sits inside the symmetric artwork padding, right
+  // up against the name) and drawn at the row's right edge by renderRowArt().
+  // The item's description is kept for the panel under the list - see
+  // renderItemPanel().
   const auto rowWithDescription = [this, &row](const int local, const uint8_t itemId, const char* name,
                                                const char* count) {
-    row(local, "");
-    snprintf(itemRowNames_[local].data(), itemRowNames_[local].size(), "%s", name);
+    row(local, name);
     snprintf(values_[local].data(), values_[local].size(), "%s", count);
     itemDescription(itemId, subtitles_[local].data(), subtitles_[local].size());
   };
@@ -3401,21 +3446,22 @@ void PokemonActivity::buildRows() {
         char count[16];
         snprintf(count, sizeof(count), "× %u",
                  bagIndex < snapshot_.state.bagCounts.size() ? snapshot_.state.bagCounts[bagIndex] : 0);
-        // TM/HM names alone ("TM01") don't say what they teach, so the move
-        // name still needs to show - but concatenating it onto the same
-        // line as the label ("TM01 - Move Name") plus the × count value
-        // overflowed and got ellipsis-truncated for several real TM/HM +
-        // move-name combinations (e.g. "TM45 - Thunder-Wave", "TM36 -
-        // Self-Destruct"; measured against the real inter_12 font metrics
-        // and this list's actual available width). Moving the move name to
-        // a subtitle line beneath the TM/HM id (mirroring GymList's
-        // leaderName/"Elite Four" split) fixes it without needing extra
-        // width: the subtitle gets the full row content width, not just
-        // whatever the value slot leaves over.
+        // "TM01 Mega Punch" - the id alone doesn't say what it teaches. The
+        // count goes to the row's right edge (see rowWithDescription) and the
+        // move's type/power/accuracy/PP to the panel under the list.
         const pokemon::MoveData* move = data == nullptr ? nullptr : pokemon::moveData(data->teachesMoveId);
-        row(local, data == nullptr ? "?" : data->name, count);
-        snprintf(subtitles_[local].data(), subtitles_[local].size(), "%s", move == nullptr ? "?" : move->name);
-        rows_[local].subtitle = subtitles_[local].data();
+        char label[48];
+        snprintf(label, sizeof(label), "%s %s", data == nullptr ? "?" : data->name, move == nullptr ? "?" : move->name);
+        row(local, label);
+        snprintf(values_[local].data(), values_[local].size(), "%s", count);
+        if (move != nullptr) {
+          char power[8] = "-";
+          char accuracy[8] = "-";
+          if (move->power != 0) snprintf(power, sizeof(power), "%u", move->power);
+          if (move->accuracy != 0) snprintf(accuracy, sizeof(accuracy), "%u%%", move->accuracy);
+          snprintf(subtitles_[local].data(), subtitles_[local].size(), tr(STR_POKEMON_MACHINE_DESC),
+                   typeName(move->type), power, accuracy, move->pp);
+        }
         break;
       }
       case Screen::Pokedex: {
@@ -3595,21 +3641,15 @@ void PokemonActivity::buildList(UiApp::ScreenType& screen) {
                        screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls || screen_ == Screen::GymList;
   int top = listTop();
   rowHeight_ = rowHeightForScreen();
-  // BattleBalls stays bottom-anchored, overlaid on the still-visible battle
-  // HUD, because its row count is always small (at most 4) - it always fits
-  // under the HUD. BattleBag (Stage 18) can list up to 17 items (every Medicine/
-  // StatusCure/PPRestore id, regardless of how many the player owns), which
-  // does NOT reliably fit there - forcing it into the same bottom-anchored
-  // math pushed the list's top edge up over the HUD instead of scrolling
-  // normally. So BattleBag deliberately uses the regular full-height
-  // top-anchored list instead (see also renderFocused(), which
-  // correspondingly does not draw the HUD behind it).
+  // BattleBag and BattleBalls both use the regular full-height top-anchored
+  // list, like the Bag outside battle, rather than overlaying the battle HUD
+  // (renderFocused() correspondingly does not draw the HUD behind either).
   // Screen::Battle/BattleMoves never reach here - isListScreen() excludes
   // both (they draw their own 2-column button grids, see
   // renderBattleMenu()/renderBattleMoveMenu()) - a single-column list of up
   // to 4 moves used to need 4 stacked rows tall enough to push into the
   // battle log box above it; the 2-column grid halves that to 2 rows.
-  const bool bottomAnchored = screen_ == Screen::Event || screen_ == Screen::BattleBalls;
+  const bool bottomAnchored = screen_ == Screen::Event;
   if (bottomAnchored) top = renderer.getScreenHeight() - metrics.buttonHintsHeight - rowCount_ * rowHeight_ - 8;
   listBounds_ = Rect{8, top, renderer.getScreenWidth() - 16, rowCount_ * rowHeight_};
   // setContentMargin() insets from frame_.safeRect() (the screen already
@@ -3944,7 +3984,7 @@ void PokemonActivity::renderFocused() {
     renderPcOrderButtons();
     return;
   }
-  if (screen_ == Screen::Battle || screen_ == Screen::BattleMoves || screen_ == Screen::BattleBalls) {
+  if (screen_ == Screen::Battle || screen_ == Screen::BattleMoves) {
     renderBattleHud();
     if (screen_ == Screen::Battle) renderBattleMenu();
     if (screen_ == Screen::BattleMoves) renderBattleMoveMenu();
@@ -4656,10 +4696,7 @@ void PokemonActivity::renderBattleHud() {
   // set for them; logicalCount() already returns the right count for
   // whichever of the two is active (command count vs. move count), so
   // battleMenuTop()'s generic "N items, 2-column grid" math applies to both.
-  // BattleBalls is still an ordinary bottom-anchored list (buildList() sets
-  // listBounds_ for it using its own item count).
-  const int hudBottom =
-      (screen_ == Screen::Battle || screen_ == Screen::BattleMoves ? battleMenuTop() : listBounds_.y) - 12;
+  const int hudBottom = battleMenuTop() - 12;
   const int available = hudBottom - hudTop;
 
   // The classic two-row diagonal layout below (opponent zone stacked above
@@ -5003,7 +5040,12 @@ void PokemonActivity::renderRowArt() {
     } else if (showsMachineCapabilityRows() && start + local < snapshot_.partyCount) {
       renderPartyRowMachineCapability(rowY, snapshot_.party[start + local]);
     }
-    if (showsItemDescriptionRows()) renderItemRowText(rowY, local);
+    if (showsItemPanel() && values_[local][0] != '\0') {
+      const char* count = values_[local].data();
+      const int countX = listBounds_.x + listBounds_.width - 16 - renderer.getTextWidth(UI_10_FONT_ID, count);
+      renderer.drawText(UI_10_FONT_ID, countX, rowY + (rowHeight_ - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
+                        count);
+    }
   }
 }
 
@@ -5021,35 +5063,117 @@ void PokemonActivity::renderRowArt() {
 // area is drawn here for it, exactly as before. peekBattleMoves() is
 // read-only (never creates or writes a battle-store entry), matching every
 // other read-only HP peek in this file (Summary, usablePartySlotAt()).
-bool PokemonActivity::showsItemDescriptionRows() const {
+bool PokemonActivity::showsItemPanel() const {
   return screen_ == Screen::BagEvolution || screen_ == Screen::BagMedicine || screen_ == Screen::BagBalls ||
-         screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls;
+         screen_ == Screen::BagMachine || screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls;
 }
 
-// A Bag row's name and "× count" on the first line, the item's description
-// underneath, starting where the list's text would (just right of the icon)
-// and running to the right edge - see rowWithDescription in buildRows().
-void PokemonActivity::renderItemRowText(const int rowY, const int local) {
-  if (local < 0 || local >= rowCount_ || itemRowNames_[local][0] == '\0') return;
-  const int textX = listBounds_.x + 112;
-  const int textRight = listBounds_.x + listBounds_.width - 8;
-  const int width = std::max(0, textRight - textX);
-  constexpr int countGap = 10;
-  const int line1Height = renderer.getLineHeight(UI_12_FONT_ID);
-  const int line2Height = renderer.getLineHeight(UI_10_FONT_ID);
-  const bool hasDescription = subtitles_[local][0] != '\0';
-  const int blockHeight = line1Height + (hasDescription ? 2 + line2Height : 0);
-  const int line1Y = rowY + std::max(0, (rowHeight_ - blockHeight) / 2);
+// Whether the highlighted item does anything from this screen: balls only
+// work mid-battle (BattleBalls), and battle-boost items (X Attack, Guard
+// Spec., ...) are listed in the Medicine pocket but only work in BattleBag.
+bool PokemonActivity::itemPanelCanUse() const {
+  if (screen_ == Screen::BagBalls) return false;
+  if (screen_ == Screen::BagMedicine) {
+    const auto realItemCount = static_cast<int>(bagItemCount(snapshot_.state.bagCounts, isMedicineCategory));
+    if (selected_ < realItemCount) return true;
+    const uint8_t itemId =
+        extraItemIdAt(snapshot_.state, static_cast<size_t>(selected_ - realItemCount), isMedicineExtraCategory);
+    const pokemon::ItemData* data = pokemon::itemData(itemId);
+    return data == nullptr || data->category != pokemon::ItemCategory::BattleBoost;
+  }
+  return true;
+}
 
-  const char* count = values_[local].data();
-  const int countWidth = renderer.getTextWidth(UI_12_FONT_ID, count);
-  renderer.drawText(UI_12_FONT_ID, textRight - countWidth, line1Y, count);
-  const std::string name =
-      renderer.truncatedText(UI_12_FONT_ID, itemRowNames_[local].data(), std::max(0, width - countWidth - countGap));
-  renderer.drawText(UI_12_FONT_ID, textX, line1Y, name.c_str());
-  if (hasDescription) {
-    const std::string description = renderer.truncatedText(UI_10_FONT_ID, subtitles_[local].data(), width);
-    renderer.drawText(UI_10_FONT_ID, textX, line1Y + line1Height + 2, description.c_str());
+// Use + Cancel, or a single OK when the item can't be used from here.
+int PokemonActivity::itemPanelButtonCount() const { return itemPanelCanUse() ? 2 : 1; }
+
+int PokemonActivity::itemPanelHeight() const {
+  constexpr int pad = 10;
+  constexpr int buttonHeight = 48;
+  return pad + renderer.getLineHeight(UI_12_FONT_ID) + 4 + 2 * renderer.getLineHeight(UI_10_FONT_ID) + pad +
+         buttonHeight + pad;
+}
+
+// Pinned just above the button hints; rowsPerPage() keeps the list clear of it.
+Rect PokemonActivity::itemPanelRect() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int height = itemPanelHeight();
+  return Rect{8, renderer.getScreenHeight() - metrics.buttonHintsHeight - 8 - height,
+              renderer.getScreenWidth() - 16, height};
+}
+
+// Shared by renderItemPanel() (what gets drawn) and loop()'s touch hit-test.
+Rect PokemonActivity::itemPanelButtonRect(const int index) const {
+  constexpr int pad = 10;
+  constexpr int gap = 10;
+  constexpr int buttonHeight = 48;
+  const Rect panel = itemPanelRect();
+  const int count = itemPanelButtonCount();
+  const int buttonWidth = (panel.width - 2 * pad - gap * (count - 1)) / count;
+  return Rect{panel.x + pad + index * (buttonWidth + gap), panel.y + panel.height - pad - buttonHeight, buttonWidth,
+              buttonHeight};
+}
+
+void PokemonActivity::openItemPanel() {
+  itemPanelOpen_ = true;
+  itemPanelChoice_ = 0;
+  requestUpdate();
+}
+
+void PokemonActivity::closeItemPanel() {
+  itemPanelOpen_ = false;
+  itemPanelChoice_ = 0;
+  requestUpdate();
+}
+
+// The highlighted item's name and description (word-wrapped, at most two
+// lines); once the item is selected, Use/Cancel (or OK) buttons underneath.
+void PokemonActivity::renderItemPanel() {
+  const int local = selected_ - pageStart();
+  if (local < 0 || local >= rowCount_) return;
+  const Rect panel = itemPanelRect();
+  renderer.fillRect(panel.x, panel.y, panel.width, panel.height, false);
+  renderer.drawRoundedRect(panel.x, panel.y, panel.width, panel.height, 2, 6, true);
+
+  constexpr int pad = 10;
+  const int textX = panel.x + pad;
+  const int maxWidth = panel.width - 2 * pad;
+  int y = panel.y + pad;
+  const std::string name = renderer.truncatedText(UI_12_FONT_ID, labels_[local].data(), maxWidth, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, textX, y, name.c_str(), true, EpdFontFamily::BOLD);
+  y += renderer.getLineHeight(UI_12_FONT_ID) + 4;
+
+  // Greedy word wrap: the first line takes as many words as fit, the second
+  // gets the rest (ellipsized if it still doesn't fit).
+  const char* text = subtitles_[local].data();
+  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  if (renderer.getTextWidth(UI_10_FONT_ID, text) <= maxWidth) {
+    renderer.drawText(UI_10_FONT_ID, textX, y, text);
+  } else {
+    const char* split = nullptr;
+    for (const char* space = strchr(text, ' '); space != nullptr; space = strchr(space + 1, ' ')) {
+      char head[128];
+      snprintf(head, sizeof(head), "%.*s", static_cast<int>(space - text), text);
+      if (renderer.getTextWidth(UI_10_FONT_ID, head) > maxWidth) break;
+      split = space;
+    }
+    if (split == nullptr) {
+      const std::string clipped = renderer.truncatedText(UI_10_FONT_ID, text, maxWidth);
+      renderer.drawText(UI_10_FONT_ID, textX, y, clipped.c_str());
+    } else {
+      char head[128];
+      snprintf(head, sizeof(head), "%.*s", static_cast<int>(split - text), text);
+      renderer.drawText(UI_10_FONT_ID, textX, y, head);
+      const std::string rest = renderer.truncatedText(UI_10_FONT_ID, split + 1, maxWidth);
+      renderer.drawText(UI_10_FONT_ID, textX, y + lineHeight, rest.c_str());
+    }
+  }
+
+  if (!itemPanelOpen_) return;
+  const bool canUse = itemPanelCanUse();
+  for (int index = 0; index < itemPanelButtonCount(); ++index) {
+    const char* label = !canUse ? tr(STR_OK) : index == 0 ? tr(STR_POKEMON_USE) : tr(STR_POKEMON_CANCEL);
+    drawGridButton(itemPanelButtonRect(index), index == itemPanelChoice_, label);
   }
 }
 
@@ -5223,7 +5347,7 @@ void PokemonActivity::renderHeaderAndHints() {
     title = tr(STR_POKEMON_BAG_EVOLUTION);
   else if (screen_ == Screen::BagMedicine)
     title = tr(STR_POKEMON_BAG_MEDICINE);
-  else if (screen_ == Screen::BagBalls)
+  else if (screen_ == Screen::BagBalls || screen_ == Screen::BattleBalls)
     title = tr(STR_POKEMON_BAG_BALLS);
   else if (screen_ == Screen::BagMachine)
     title = tr(STR_POKEMON_BAG_MACHINES);
@@ -5275,6 +5399,7 @@ void PokemonActivity::render(RenderLock&&) {
   renderFocused();
   if (isChoiceButtonScreen()) renderChoiceButtons();
   renderRowArt();
+  if (showsItemPanel()) renderItemPanel();
   renderer.displayBuffer(cleanRefreshNeeded_ ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
   cleanRefreshNeeded_ = false;
 }

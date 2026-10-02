@@ -181,8 +181,18 @@ class PokemonActivity final : public Activity {
   int trainerCardCells(pokemon::PokemonUiRect* cells, int capacity, bool hallOfFame) const;
   void renderBagGrid();
   void renderPcOrderButtons();
-  bool showsItemDescriptionRows() const;
-  void renderItemRowText(int rowY, int local);
+  // Bag item lists (Stones/Medicine/Balls/TM-HM, and Bag/Balls mid-battle) reserve
+  // a panel at the bottom: it describes the highlighted item, and selecting
+  // an item opens Use/Cancel buttons in it (see renderItemPanel()).
+  bool showsItemPanel() const;
+  bool itemPanelCanUse() const;
+  int itemPanelButtonCount() const;
+  int itemPanelHeight() const;
+  Rect itemPanelRect() const;
+  Rect itemPanelButtonRect(int index) const;
+  void openItemPanel();
+  void closeItemPanel();
+  void renderItemPanel();
   // Short-choice screens (prompts, confirmations, Event, Starter, Settings,
   // Actions) render their options as buttons instead of a text list - see
   // isChoiceButtonScreen().
@@ -298,8 +308,8 @@ class PokemonActivity final : public Activity {
   // they get this dedicated buffer.
   // Room for a translated item description (Bag rows), not just a short tag.
   std::array<std::array<char, 128>, ROW_CAPACITY> subtitles_{};
-  // Bag rows draw their own name (see renderItemRowText()); the list row's label stays empty.
-  std::array<std::array<char, 56>, ROW_CAPACITY> itemRowNames_{};
+  bool itemPanelOpen_ = false;
+  int itemPanelChoice_ = 0;
   Rect listBounds_{};
   int rowHeight_ = 0;
   bool cleanRefreshNeeded_ = true;

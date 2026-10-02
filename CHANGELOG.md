@@ -1,3 +1,11 @@
+## [1.5.0] - 2026-10-02
+
+### Changed
+
+- Bag lists are back to one line per item (name and count). The item's description now appears in a panel at the bottom of the screen instead of under every row, wrapping onto a second line rather than being cut off. Selecting an item opens Use and Cancel buttons in that panel; an item that can't be used from there (a ball outside battle, a battle item outside battle) shows OK instead. This applies to Stones, Medicine, Balls and TM/HM, and to Bag and Balls during battle.
+- TM/HM rows show the move they teach next to their number, and the panel shows the move's type, power, accuracy and PP.
+- Choosing a ball in battle now opens a full-screen list like the Bag, instead of a short list over the battle screen.
+
 ## [1.4.0] - 2026-10-01
 
 ### Added
