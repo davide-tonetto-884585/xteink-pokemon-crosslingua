@@ -15,7 +15,7 @@ One sync carries:
 | --- | --- |
 | **Pokémon save** (Pokémon firmware only) | Replaces the receiver's game, exactly like [Pokémon Save Transfer](pokemon-save-transfer.md). The previous game is kept in `/.crosspoint/pokemon-backup/`. |
 | **Reading stats** | Exchanged **both ways**: each reader stores the other's all-time totals in `/.crosspoint/synced_stats/`, the same files [Reading Stats Sync](reading-stats-sync.md) uses, so both readers show the combined totals afterwards. |
-| **Book position** | The position in the book that was last open on the sender is written to the same book on the receiver, which then becomes its most recent book. If the receiver does not have that book, the EPUB is copied over too. |
+| **Book position** | The position in the book that was last open on the sender is written to the same book on the receiver, which then becomes its most recent book. If the receiver does not have that book, the EPUB is copied over too. The book's own reading stats (time, pages, sessions, dates) come along and are combined with the receiver's. |
 
 Anything the sender does not have (no Pokémon game, no book opened yet) is
 simply left out.
@@ -58,6 +58,13 @@ Copying a book makes the sync noticeably longer - how much depends on the size
 of the EPUB, since it travels over the same direct radio link as everything else. Keep both readers on their sync screens until
 **Sync complete** appears. Books larger than 64 MB are not copied; the rest is
 still synced and the screen says which file is missing.
+
+The book's own reading stats travel with it, so its Reading Stats screen on the
+receiver is filled in. They are combined with whatever the receiver already had
+for that book by keeping the larger value of each counter - syncing twice never
+counts the same reading twice. (The flip side: if both readers read different
+parts of the book separately, the totals show the larger of the two, not the
+sum.)
 
 The position travels as the reader's own progress record, including the offset
 of the text on screen, so it lands on the same text even when the two readers

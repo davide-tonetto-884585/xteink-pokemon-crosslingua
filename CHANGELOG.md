@@ -2,11 +2,16 @@
 
 ### Added
 
-- **Sync with Nearby Reader** (File Transfer menu): one button syncs everything between two readers over ESP-NOW, no Wi-Fi network needed - the Pokémon save (copy or move), the reading stats (exchanged both ways, so both readers show the combined totals) and the position in the book last open on the sender, which lands on the same text even if the other reader lays the book out differently. The receiver sees a summary and must accept; everything is verified before anything is applied. If the receiver does not have that book, the EPUB itself is copied over as well (it asks only when the book is missing, and never overwrites one). The receiver can jump straight into the synced book. See [docs/nearby-sync.md](docs/nearby-sync.md). English and Italian only for now.
+- **Sync with Nearby Reader** (File Transfer menu): one button syncs everything between two readers over ESP-NOW, no Wi-Fi network needed - the Pokémon save (copy or move), the reading stats (exchanged both ways, so both readers show the combined totals) and the position in the book last open on the sender, which lands on the same text even if the other reader lays the book out differently. The receiver sees a summary and must accept; everything is verified before anything is applied. The book's own reading stats come along too, so its Reading Stats screen is filled in on the receiver. If the receiver does not have that book, the EPUB itself is copied over as well (it asks only when the book is missing, and never overwrites one). The receiver can jump straight into the synced book. See [docs/nearby-sync.md](docs/nearby-sync.md). English and Italian only for now.
 
 ### Changed
 
 - Pokémon Save Transfer (Pokémon → Settings) now runs on the same sync engine. Readers on v1.7.0 and readers on this version do not see each other: update both.
+
+### Fixed
+
+- Lingua Tooltip mode: when the translation did not fit above or below its sentence, the popup was drawn on top of the sentence with the sentence's underline crossing the translation, and the page text peeked out at its sides. It now goes on the side with more room (shortened to fit), and covers the full text width.
+- X3: waking to Home could leave part of the sleep image on screen. Home now uses a full refresh after a wake on X3, as a silent restart already did.
 
 ## [1.7.0] - 2026-10-02
 
