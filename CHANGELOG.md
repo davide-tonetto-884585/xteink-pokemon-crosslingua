@@ -2,7 +2,7 @@
 
 ### Added
 
-- **Sync with Nearby Reader** (File Transfer menu): one button syncs everything between two readers over ESP-NOW, no Wi-Fi network needed - the Pokémon save (copy or move), the reading stats (exchanged both ways, so both readers show the combined totals) and the position in the book last open on the sender, which lands on the same text even if the other reader lays the book out differently. The receiver sees a summary and must accept; everything is verified before anything is applied. The receiver can jump straight into the synced book. See [docs/nearby-sync.md](docs/nearby-sync.md). English and Italian only for now.
+- **Sync with Nearby Reader** (File Transfer menu): one button syncs everything between two readers over ESP-NOW, no Wi-Fi network needed - the Pokémon save (copy or move), the reading stats (exchanged both ways, so both readers show the combined totals) and the position in the book last open on the sender, which lands on the same text even if the other reader lays the book out differently. The receiver sees a summary and must accept; everything is verified before anything is applied. If the receiver does not have that book, the EPUB itself is copied over as well (it asks only when the book is missing, and never overwrites one). The receiver can jump straight into the synced book. See [docs/nearby-sync.md](docs/nearby-sync.md). English and Italian only for now.
 
 ### Changed
 

@@ -61,7 +61,7 @@ Full guide: [Pokémon Save Transfer](docs/pokemon-save-transfer.md).
 **File Transfer → Sync with Nearby Reader** syncs the Pokémon save, the reading stats
 (both ways) and the position in the book you last had open, in a single ESP-NOW transfer.
 The book position lands on the same text even if the other reader lays the book out
-differently. Full guide: [Sync with Nearby Reader](docs/nearby-sync.md).
+differently, and if the other reader doesn't have the book yet, the EPUB is copied too. Full guide: [Sync with Nearby Reader](docs/nearby-sync.md).
 
 ### Updates from this repository
 

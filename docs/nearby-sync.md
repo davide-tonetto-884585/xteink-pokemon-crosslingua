@@ -15,7 +15,7 @@ One sync carries:
 | --- | --- |
 | **Pokémon save** (Pokémon firmware only) | Replaces the receiver's game, exactly like [Pokémon Save Transfer](pokemon-save-transfer.md). The previous game is kept in `/.crosspoint/pokemon-backup/`. |
 | **Reading stats** | Exchanged **both ways**: each reader stores the other's all-time totals in `/.crosspoint/synced_stats/`, the same files [Reading Stats Sync](reading-stats-sync.md) uses, so both readers show the combined totals afterwards. |
-| **Book position** | The position in the book that was last open on the sender is written to the same book on the receiver, which then becomes its most recent book. |
+| **Book position** | The position in the book that was last open on the sender is written to the same book on the receiver, which then becomes its most recent book. If the receiver does not have that book, the EPUB is copied over too. |
 
 Anything the sender does not have (no Pokémon game, no book opened yet) is
 simply left out.
@@ -48,9 +48,16 @@ open), as an EPUB. The receiver looks for the same book:
 2. otherwise, a file with the same name among its recent books;
 3. otherwise, in the folder where **Receive File** saves books, or the SD root.
 
-If it is not found, everything else is still synced and the screen says which
-file was missing - copy the book over (for example with **Receive File**) and
-sync again.
+If the receiver does not have the book, **the book itself is sent too**: the
+offer screen says so, with its size, before you accept. It is saved under the
+sender's file name in the folder **Receive File** uses (the SD root unless you
+changed it there), then opened at the synced position. A book that is already
+on the receiver is never sent again or overwritten.
+
+Copying a book makes the sync noticeably longer - how much depends on the size
+of the EPUB, since it travels over the same direct radio link as everything else. Keep both readers on their sync screens until
+**Sync complete** appears. Books larger than 64 MB are not copied; the rest is
+still synced and the screen says which file is missing.
 
 The position travels as the reader's own progress record, including the offset
 of the text on screen, so it lands on the same text even when the two readers
