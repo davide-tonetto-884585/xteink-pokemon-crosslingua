@@ -1,3 +1,9 @@
+## [1.8.1] - 2026-10-02
+
+### Fixed
+
+- X3: **Check for Updates** always reported "Update failed". With Wi-Fi on, the X3 ran out of memory while checking GitHub's security certificate. It now frees the screen buffer during the update check and download (the screen keeps showing its last image), so updates work again. During the download the progress bar stays still until it finishes. X4 Pro is unchanged. **X3 readers on v1.8.0 or earlier have to install this version once from the SD card** (Settings → System → SD Card Firmware Update); later updates then work over Wi-Fi.
+
 ## [1.8.0] - 2026-10-02
 
 ### Added
