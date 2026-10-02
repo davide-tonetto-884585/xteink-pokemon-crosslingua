@@ -1065,7 +1065,23 @@ void TooltipOverlay::render(GfxRenderer& renderer, const Page& page, int fontId,
 
   int maxL = (viewportHeight * 4 / 10) / tlh;
   if (maxL < 1) maxL = 1;
-  const int nLines = lineCount > maxL ? maxL : lineCount;  // clamp tall tooltips; excess text is clipped
+  int nLines = lineCount > maxL ? maxL : lineCount;  // clamp tall tooltips; excess text is clipped
+
+  // Placement: above the sentence if the box fits there, else below it. If it fits on neither side
+  // whole, it goes on the side with more room and is cut down to that room - never on top of the
+  // sentence it translates (the old fallback clamped it to the viewport edge, covering the very
+  // lines it explains, with their underline then drawn straight through the translation).
+  const int spaceAbove = (bounds.firstLineY - GAP) - (yOffset + PAD);
+  const int spaceBelow = (yOffset + viewportHeight - PAD) - (lastY + lh + GAP);
+  const int fullH = nLines * tlh + 2 * PAD;
+  bool placeAbove = fullH <= spaceAbove;
+  if (!placeAbove && fullH > spaceBelow) {
+    placeAbove = spaceAbove > spaceBelow;
+    const int linesThatFit = ((placeAbove ? spaceAbove : spaceBelow) - 2 * PAD) / tlh;
+    // Not even one line fits beside the sentence (it fills the page): keep the old clamped
+    // overlap rather than drawing nothing.
+    if (linesThatFit >= 1 && linesThatFit < nLines) nLines = linesThatFit;
+  }
 
   int tipW;
   if (nLines == 1) {
@@ -1082,11 +1098,17 @@ void TooltipOverlay::render(GfxRenderer& renderer, const Page& page, int fontId,
   const int tipH = nLines * tlh + 2 * PAD;
 
   int tipX = xOffset + PAD;
-  int tipY = (tipH + GAP <= bounds.firstLineY - yOffset) ? bounds.firstLineY - GAP - tipH : lastY + lh + GAP;
+  int tipY = placeAbove ? bounds.firstLineY - GAP - tipH : lastY + lh + GAP;
   if (tipY < yOffset + PAD) tipY = yOffset + PAD;
   if (tipY + tipH > yOffset + viewportHeight - PAD) tipY = yOffset + viewportHeight - PAD - tipH;
 
-  renderer.fillRect(tipX - 1, tipY - 1, tipW + 2, tipH + 2, false);
+  // The underline goes down BEFORE the box, so if the box still has to overlap the sentence (a
+  // sentence filling the whole page) it covers the underline instead of being crossed by it.
+  drawSentenceUnderline(renderer, page, span, fontId, xOffset, yOffset);
+
+  // Blank the full text width behind the box, not just the box: the page's lines are wider than the
+  // box (it is inset by PAD), so their first/last glyphs used to peek out on both sides.
+  renderer.fillRect(xOffset, tipY - 1, viewportWidth, tipH + 2, false);
   renderer.drawRoundedRect(tipX, tipY, tipW, tipH, 1, RAD, true);
 
   // Draw the precomputed lines verbatim — the SAME [start, len) ranges the wrap measured, so what is
@@ -1105,8 +1127,6 @@ void TooltipOverlay::render(GfxRenderer& renderer, const Page& page, int fontId,
     }
     textY += tlh;
   }
-
-  drawSentenceUnderline(renderer, page, span, fontId, xOffset, yOffset);
 }
 
 // ── Font helper ───────────────────────────────────────────────────────────────
