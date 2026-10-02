@@ -78,9 +78,8 @@ using IvEvStoreWriteFileBytes = std::array<uint8_t, POKEMON_IVEV_FILE_MAX_BYTES>
 // at creation - catch, starter pick, gift/event - and never changed again)
 // and EVs (0-255 per stat, accumulated from battle wins - see
 // PokemonService::awardBattleXp()). Lives in its own side file rather than
-// growing PokemonRecord (which has only 1 spare byte, nowhere near enough -
-// see docs/development/pokemon-iv-ev-plan.md) or reusing
-// pokemon-battle-{a,b}.bin (which only covers the 6 active Party members and
+// growing PokemonRecord (which has only 1 spare byte, nowhere near enough)
+// or reusing pokemon-battle-{a,b}.bin (which only covers the 6 active Party members and
 // is designed to be lossy/reconstructible - wrong fit for a permanent,
 // PC-box-inclusive attribute).
 //

@@ -99,9 +99,3 @@ Pokémon and related names, characters, and artwork belong to their respective r
 - [Release checklist](docs/release-checklist.md)
 - [Artwork and packaging](docs/artwork-setup.md)
 - [Save-file formats](docs/file-formats.md)
-- [Pokémon battle system roadmap](docs/development/pokemon-battle-roadmap.md)
-- [Xteink X4 Pro support roadmap](docs/development/pokemon-x4pro-roadmap.md)
-
-### TODO / future consideration
-
-- [Pokémon Red authenticity gap analysis](docs/development/pokemon-gen1-authenticity-roadmap.md) - a prioritized list of real Gen 1 mechanics not yet modeled (stat stages, critical hits, IVs/EVs, recoil/multi-hit moves), with impact/cost notes for tackling them in future phases.

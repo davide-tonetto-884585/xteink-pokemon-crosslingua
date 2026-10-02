@@ -57,7 +57,7 @@ constexpr uint8_t MIMIC_MOVE_ID = 102;
 // combatant leaves the field mid-battle (faints, or is voluntarily switched
 // out), whether it was the one holding the OTHER side in a trap and so must
 // release BattleCombatant::trappedTurnsRemaining on that other side - see
-// docs/development/pokemon-gen1-audit-round6.md item 2.4. The engine's own
+// round 6 audit item 2.4. The engine's own
 // faintCombatant() already does this internally for the faint case; this is
 // for the voluntary-switch case, which PokemonActivity.cpp handles itself.
 bool isPartialTrapMove(uint8_t moveId);
@@ -131,7 +131,7 @@ struct BattleCombatant {
   int8_t evasionStage = 0;
   // Permanent individual variance (IVs, 0-15, rolled once at creation and
   // never changed) and accumulated EVs (0-255, simplified from real Gen 1's
-  // 0-65,535 - see docs/development/pokemon-iv-ev-plan.md), one pair per
+  // 0-65,535), one pair per
   // stat in BaseStats/STAT_COUNT order (HP/Attack/Defense/Special/Speed).
   // Unlike the stat stages above, these are NOT reset per battle - a
   // party member's values come from PokemonService::ensureIvEv() (backed by
@@ -170,7 +170,7 @@ struct BattleCombatant {
   // direHitActive above), while Reflect/Light Screen/Mist protect the whole
   // SIDE and must persist through a switch, only ending on their own timer or
   // when the side is defeated - see reflectActive/lightScreenActive below and
-  // docs/development/pokemon-gen1-audit-round6.md item 2.5. PokemonActivity's
+  // round 6 audit item 2.5. PokemonActivity's
   // setupBattlePlayer()/setupBattleOpponent() carry this field (along with
   // reflectActive/lightScreenActive) across a switch that continues the same
   // battle, instead of letting BattleCombatant's usual full switch-reset
@@ -216,7 +216,7 @@ struct BattleCombatant {
   // (and mistActive above) are deliberately carried forward by
   // PokemonActivity's setupBattlePlayer()/setupBattleOpponent() when the
   // switch continues the same ongoing battle (see their preserveSideEffects
-  // parameter and docs/development/pokemon-gen1-audit-round6.md item 2.5).
+  // parameter and round 6 audit item 2.5).
   // Still reset to false by a genuinely fresh battle, and by Haze.
   bool reflectActive = false;
   bool lightScreenActive = false;
@@ -354,7 +354,7 @@ enum class BattleLogEvent : uint8_t {
                     // (and Toxic's counter)/confusion, and Reflect/Light
                     // Screen/Mist/Focus Energy (Guard Spec./Dire Hit's same
                     // shared fields) all reset on both sides - implemented
-                    // in full per pokemon-gen1-audit-round2.md/round4.md
+                    // in full per the round 2/round 4 audits'
                     // item 0.4/1.4. Deliberately clears the OPPONENT's
                     // status too (the intended reading, not the real Gen 1
                     // "lingering status" glitch some cartridges have - this
@@ -498,8 +498,7 @@ struct BattleTurnResult {
 };
 
 // Generation I-derived stat formulas, now with IV/EV: `iv` is 0-15 (real Gen
-// 1 range), `ev` is 0-255 (this project's simplified range - see
-// docs/development/pokemon-iv-ev-plan.md). `iv=0, ev=0` reproduces exactly
+// 1 range), `ev` is 0-255 (this project's simplified range). `iv=0, ev=0` reproduces exactly
 // what these formulas returned before IV/EV existed - every existing caller
 // that hasn't been taught about a Pokemon's real IV/EV yet can still pass
 // 0/0 and see no behavior change.

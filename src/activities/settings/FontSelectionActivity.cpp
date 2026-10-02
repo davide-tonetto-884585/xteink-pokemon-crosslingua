@@ -77,7 +77,7 @@ int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontF
   }
 
   // Bitter's builtin row below was removed (its font files were dropped to
-  // save flash - see TASKS.md's "Font tích hợp đọc sách" note); it now
+  // save flash); it now
   // renders via LexendDeca's glyph data (CrossPointSettings::
   // getBuiltInReaderFontId() redirects BITTER there too), so a save with
   // fontFamily == BITTER from before this change highlights the LexendDeca
@@ -117,8 +117,8 @@ void FontSelectionActivity::onEnter() {
 
   constexpr FontFamilyPointSizeRange builtinRange{10, 16};
   fonts_.push_back({fontFamilyLabel(I18N.get(StrId::STR_LEXEND_DECA), builtinRange), true, 0});
-  // Bitter's own row was removed - its font files were dropped to save flash
-  // (see TASKS.md's "Font tích hợp đọc sách" note). Its FONT_FAMILY enum
+  // Bitter's own row was removed - its font files were dropped to save flash.
+  // Its FONT_FAMILY enum
   // value (1) stays reserved so an existing save's fontFamily == BITTER
   // still loads without error; findCurrentFontIndex() and
   // CrossPointSettings::getBuiltInReaderFontId() both redirect it to

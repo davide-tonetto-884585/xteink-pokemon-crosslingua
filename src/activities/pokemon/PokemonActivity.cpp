@@ -1505,7 +1505,7 @@ void PokemonActivity::setupBattleOpponent(const uint16_t speciesId, const uint8_
   // the outgoing opponent Pokemon (fainted, or an AI voluntarily switching
   // mid-battle - a real mechanic since v0.17.0) was holding the player in a
   // partial trap, switching it out releases that trap immediately - see
-  // docs/development/pokemon-gen1-audit-round6.md item 2.4. A no-op the
+  // round 6 audit item 2.4. A no-op the
   // first time this runs for a fresh battle (nothing has trapped anyone yet).
   if (battleOpponent_.forcedMoveId != 0 && pokemon::isPartialTrapMove(battleOpponent_.forcedMoveId)) {
     battlePlayer_.trappedTurnsRemaining = 0;
@@ -1515,7 +1515,7 @@ void PokemonActivity::setupBattleOpponent(const uint16_t speciesId, const uint8_
   // these protect the opponent's whole SIDE and must survive the opponent
   // trainer sending out its next team member mid-battle, but must not leak
   // in from a previous, already-concluded battle when a fresh one starts -
-  // see docs/development/pokemon-gen1-audit-round6.md item 2.5.
+  // see round 6 audit item 2.5.
   const bool carryReflect = preserveSideEffects && battleOpponent_.reflectActive;
   const bool carryLightScreen = preserveSideEffects && battleOpponent_.lightScreenActive;
   const bool carryMist = preserveSideEffects && battleOpponent_.mistActive;

@@ -201,8 +201,7 @@ EpdFont lexenddeca16BoldItalicFont(&lexenddeca_16_bolditalic);
 EpdFontFamily lexenddeca16FontFamily(&lexenddeca16RegularFont, &lexenddeca16BoldFont, &lexenddeca16ItalicFont,
                                      &lexenddeca16BoldItalicFont);
 // Bitter's own EpdFont/EpdFontFamily objects were removed along with its
-// builtinFonts/*.h files (dropped to save flash - see TASKS.md's "Font tích
-// hợp đọc sách" note). CrossPointSettings.cpp redirects any font ID lookup
+// builtinFonts/*.h files (dropped to save flash). CrossPointSettings.cpp redirects any font ID lookup
 // for FONT_FAMILY::BITTER to LexendDeca's font family instead.
 
 EpdFont smallFont(&inter_8_regular);

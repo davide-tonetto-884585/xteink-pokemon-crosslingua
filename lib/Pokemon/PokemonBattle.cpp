@@ -64,10 +64,9 @@ bool rollCriticalHit(const uint8_t baseSpeed, const bool highCritRatio, const Ra
 
 constexpr uint8_t HAZE_MOVE_ID = 114;
 
-// The ~22 real Gen 1 status moves that change a single stat stage - see
-// docs/development/pokemon-gen1-authenticity-roadmap.md item 1 for why this
-// list stops here (screens/Mist/self-heal/switch-forcing/move-copying moves
-// are separate, larger features tracked as follow-ups on that same doc).
+// The ~22 real Gen 1 status moves that change a single stat stage. The list
+// deliberately stops here: screens/Mist/self-heal/switch-forcing/move-copying
+// moves are separate, larger features handled elsewhere.
 // Hand-authored rather than a new CSV column, same rationale as
 // PokemonTypeChart.cpp and the crit move list above.
 struct StatChangeTableEntry {
@@ -364,7 +363,7 @@ uint16_t effectiveSpeed(const BattleCombatant& combatant) {
   }
   // Real Gen 1 (through Gen VI) reduces a paralyzed Pokemon's Speed to 1/4,
   // not 1/2 - the milder 1/2 reduction is a Generation VII change. Audit
-  // round 6 (docs/development/pokemon-gen1-audit-round6.md, item 2.2)
+  // round 6 (item 2.2)
   // flagged this. The user was told the real Gen 1 fraction is 1/4 and
   // explicitly chose to keep this milder 1/2 reduction rather than fix it -
   // this is a deliberate divergence, not an oversight; do not "fix" it again
@@ -1068,7 +1067,7 @@ void resolveGenericMoveEffect(BattleCombatant& attacker, BattleCombatant& defend
   // own status-infliction chance), since the decoy - not the real Pokemon -
   // was the thing that got hit. Checking the POST-hit substituteHp instead
   // would incorrectly let all three "leak through" on the exact hit that
-  // breaks the Substitute (docs/development/pokemon-gen1-audit-round6.md,
+  // breaks the Substitute (round 6 audit,
   // item 2.3). Used below for the flinch/secondary-stat-drop checks (which
   // used to take their own narrower-scoped copy of this) and for the
   // primary-ailment-infliction check near the end of this function, which
@@ -1711,7 +1710,7 @@ void faintCombatant(BattleCombatant& combatant, BattleCombatant& other, BattleLo
   // (Wrap/Bind/Fire Spin/Clamp - see BattleCombatant::trappedTurnsRemaining's
   // doc comment) faints, the trapped target is released immediately rather
   // than staying immobilized for however many turns were left against
-  // whatever comes in next (docs/development/pokemon-gen1-audit-round6.md,
+  // whatever comes in next (round 6 audit,
   // item 2.4). `combatant.forcedMoveId` being a trap move id means this
   // fainting Pokemon was the one holding `other` in a trap.
   if (combatant.forcedMoveId != 0 && isTrapMove(combatant.forcedMoveId)) {
@@ -1960,7 +1959,7 @@ BattleTurnResult stepBattle(BattleCombatant& player, BattleCombatant& opponent, 
     // caused by the player's own action, so it counts as a win: real Gen 1
     // resolves a mutual KO in favor of whoever's attack caused it, and the
     // battle must not force a switch/gym-loss against an opponent that's
-    // already at 0 HP (see docs/development/pokemon-gen1-audit-round3.md
+    // already at 0 HP (see round 3 audit
     // bug 2.4 for the UI-side consequences of getting this wrong).
     if (player.currentHp == 0 && opponent.currentHp == 0) {
       faintCombatant(player, opponent, result.player.event);

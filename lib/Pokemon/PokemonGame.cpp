@@ -848,7 +848,7 @@ bool useEvolutionItem(PokemonState& state, PokemonRecord& record, const Evolutio
   // here: evolving backfills every level-appropriate move the new species
   // has, so a freshly evolved high-level Pokemon carries a queue of them, and
   // used to be unable to take a further stone until each was resolved
-  // (docs/development/pokemon-gen1-audit-round7.md bug 1.1 fixed the
+  // (round 7 audit bug 1.1 fixed the
   // other-record half of this).
   bool evolutionPending = false;
   for (const PendingEvent& event : state.pendingEvents) {

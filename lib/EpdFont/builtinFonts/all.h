@@ -3,8 +3,7 @@
 #include <builtinFonts/ui_symbols_10.h>
 
 // Built-in reading fonts retain the PHM fallback ranges but exclude emoticons.
-// Bitter's own 16 files were dropped to save flash (~600 KB estimated - see
-// TASKS.md's "Font tích hợp đọc sách" note); LexendDeca is the sole built-in
+// Bitter's own 16 files were dropped to save flash (~600 KB estimated); LexendDeca is the sole built-in
 // reading font now (it was already this device's default reader font family,
 // CrossPointSettings.h's `fontFamily = LEXENDDECA`), with SD-card fonts still
 // available for anyone who wants a different one. CrossPointSettings.cpp's

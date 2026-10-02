@@ -404,8 +404,8 @@ void EpubReaderTouchMenuActivity::discoverFonts() {
   constexpr FontFamilyPointSizeRange builtinRange{10, 16};
   fontLabels.push_back(fontFamilyLabel(tr(STR_LEXEND_DECA), builtinRange));
   fontSettingIndexes.push_back(0);
-  // Bitter's own row was removed - its font files were dropped to save flash
-  // (see TASKS.md's "Font tích hợp đọc sách" note). A save with
+  // Bitter's own row was removed - its font files were dropped to save flash.
+  // A save with
   // fontFamily == BITTER from before this change simply won't match any
   // entry in fontSettingIndexes below (see its std::find() use further down
   // in this file) and falls back to this list's own default highlight,

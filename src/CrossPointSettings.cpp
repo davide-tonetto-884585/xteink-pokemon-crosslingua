@@ -128,8 +128,7 @@ CrossPointSettings::FONT_SIZE firstAvailableReaderFontSize() {
 
 int getFallbackReaderFontIdForFamily(const CrossPointSettings::FONT_FAMILY family) {
   switch (family) {
-    // Bitter's builtin font files were dropped to save flash (see TASKS.md's
-    // "Font tích hợp đọc sách" note) - redirect to LexendDeca instead of the
+    // Bitter's builtin font files were dropped to save flash - redirect to LexendDeca instead of the
     // no-longer-compiled BITTER_*_FONT_ID macros. The BITTER enum value itself
     // stays (a save with fontFamily == BITTER from before this change must
     // still load without error), it just no longer has its own glyph data.
@@ -1179,8 +1178,7 @@ int CrossPointSettings::getBuiltInReaderFontId() const {
   const FONT_SIZE effectiveSize = getEffectiveReaderFontSize();
 
   switch (fontFamily) {
-    // Bitter's builtin font files were dropped to save flash (see TASKS.md's
-    // "Font tích hợp đọc sách" note) - a save with fontFamily == BITTER from
+    // Bitter's builtin font files were dropped to save flash - a save with fontFamily == BITTER from
     // before this change redirects to LexendDeca instead of the no-longer-
     // compiled BITTER_*_FONT_ID macros. Falls into the same case as
     // LEXENDDECA below rather than a separate no-op case, so there is only
