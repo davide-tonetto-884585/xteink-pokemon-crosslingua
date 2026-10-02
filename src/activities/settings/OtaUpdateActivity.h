@@ -28,6 +28,10 @@ class OtaUpdateActivity : public Activity {
 
   void onWifiSelectionComplete(bool success);
   void runUpdateInstall();
+  // See the .cpp: frees the framebuffer for a TLS connection on low-memory
+  // devices (X3). True if it was released and must be restored afterwards.
+  bool releaseFramebufferForNetwork();
+  void restoreFramebufferAfterNetwork();
 
  public:
   explicit OtaUpdateActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

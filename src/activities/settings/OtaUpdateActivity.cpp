@@ -26,6 +26,13 @@ StrId failureMessageFor(const OtaUpdater::OtaUpdaterError error) {
   return StrId::STR_UPDATE_FAILED;
 }
 
+// Free heap below which the ~48 KB framebuffer is released for the GitHub TLS
+// connection. With Wi-Fi up an X3 (ESP32-C3) has only ~60 KB left, and the
+// handshake's certificate check then fails for lack of memory
+// (MBEDTLS_ERR_MPI_ALLOC_FAILED, heap minimum seen at a few hundred bytes).
+// Devices with more room (X4 Pro) keep their framebuffer and live progress.
+constexpr uint32_t OTA_LOW_HEAP_BYTES = 96U * 1024U;
+
 TouchActionButtons::Layout getOtaActionLayout(const GfxRenderer& renderer) {
   constexpr int sideMargin = 24;
   constexpr int bottomMargin = 12;
@@ -57,7 +64,9 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
+  const bool released = releaseFramebufferForNetwork();
   const auto res = updater.checkForUpdate();
+  if (released) restoreFramebufferAfterNetwork();
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update check failed: %d", res);
     {
@@ -83,6 +92,32 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
     state = WAITING_CONFIRMATION;
   }
   requestUpdate(true);
+}
+
+// Same trick Lingua's translation uses for its own TLS calls: the panel keeps
+// showing the last frame without a buffer, so the ~48 KB can go to the TLS
+// handshake. Only on low-heap devices, and only while nothing needs drawing.
+bool OtaUpdateActivity::releaseFramebufferForNetwork() {
+  if (ESP.getFreeHeap() >= OTA_LOW_HEAP_BYTES) return false;
+  RenderLock lock(*this);
+  const bool released = renderer.releaseFrameBufferForNetwork();
+  LOG_INF("OTA", "Framebuffer %s for TLS: free=%u maxAlloc=%u", released ? "released" : "kept",
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  return released;
+}
+
+void OtaUpdateActivity::restoreFramebufferAfterNetwork() {
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    {
+      RenderLock lock(*this);
+      if (renderer.hasFrameBuffer() || renderer.restoreFrameBufferAfterNetwork()) return;
+    }
+    LOG_ERR("OTA", "Framebuffer realloc failed (attempt %d/5)", attempt + 1);
+    delay(100);
+  }
+  // Nothing left to draw on: restart, which is where every OTA outcome ends anyway.
+  LOG_ERR("OTA", "Framebuffer realloc permanently failed; restarting");
+  ESP.restart();
 }
 
 void OtaUpdateActivity::onEnter() {
@@ -117,6 +152,7 @@ void OtaUpdateActivity::onExit() {
 }
 
 void OtaUpdateActivity::render(RenderLock&&) {
+  if (!renderer.hasFrameBuffer()) return;  // released for a TLS connection; restored before any redraw
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -211,14 +247,18 @@ void OtaUpdateActivity::runUpdateInstall() {
     requestUpdate(true);
     return;
   }
+  // Without a framebuffer (low-heap device) the progress screen just stays as drawn above.
+  const bool released = releaseFramebufferForNetwork();
   const auto res = updater.installUpdate(
       [](void* ctx) {
         // immediate=true notifies the render task directly. The default deferred path only
         // sets a flag consumed at the end of ActivityManager::loop(), which never runs while
         // installUpdate() blocks this task.
-        static_cast<OtaUpdateActivity*>(ctx)->requestUpdate(true);
+        auto* self = static_cast<OtaUpdateActivity*>(ctx);
+        if (self->renderer.hasFrameBuffer()) self->requestUpdate(true);
       },
       this);
+  if (released) restoreFramebufferAfterNetwork();
 
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update failed: %d", res);
