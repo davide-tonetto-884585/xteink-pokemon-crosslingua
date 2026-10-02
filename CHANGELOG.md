@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Added
+
+- **Bookshelf** Home style (Settings → Display → UI Theme): your library as a bookcase. Over a celestial wallpaper (moons, stars, constellations): at the top, a compact panel with the book you are reading - cover, title, author and the same reading stats as the Dashboard home (reading time, time left, progress, pages/min, daily average, started, estimated finish, sessions); below, a shelf of the books you have read and a shelf of random books from the SD card you have not opened yet - most standing spine-out with the title along the spine, a few face-on with their cover, and on the Pokémon firmware the first two Pokémon of your party sitting on the shelves. Tap a book (X4 Pro) or frame it with the side buttons and press Read (X3/X4) to open it. See [docs/bookshelf-home.md](docs/bookshelf-home.md). English and Italian only for now.
+
 ## [1.8.1] - 2026-10-02
 
 ### Fixed
