@@ -309,6 +309,42 @@ bool GfxRenderer::restoreFrameBufferAfterBuild() {
   return frameBuffer != nullptr;
 }
 
+#if defined(SIMULATOR)
+// The simulator's HAL has no free/realloc of the panel buffer (and no heap pressure to relieve), so
+// the Lingua translation network phase simply keeps the framebuffer.
+bool GfxRenderer::releaseFrameBufferForNetwork() { return false; }
+bool GfxRenderer::restoreFrameBufferAfterNetwork() { return frameBuffer != nullptr; }
+#else
+bool GfxRenderer::releaseFrameBufferForNetwork() {
+  // FREE (not lend) the framebuffer so the TLS handshake's allocator can use
+  // the ~48 KB hole. Mirror the loan flow's renderer bookkeeping: null out
+  // frameBuffer so hasFrameBuffer() reports false and the coarse draw/display
+  // entry points below become safe no-ops while the buffer is gone. HalDisplay
+  // refuses (returns false) if the buffer is already released or lent to a
+  // build, in which case we leave frameBuffer untouched.
+  if (!display.releaseFrameBufferStorageForNetwork()) {
+    LOG_ERR("GFX", "releaseFrameBufferForNetwork: HAL refused (released or lent)");
+    return false;
+  }
+  frameBuffer = nullptr;
+  return true;
+}
+
+bool GfxRenderer::restoreFrameBufferAfterNetwork() {
+  // Reallocate the freed framebuffer. Unlike the loan restore, this CAN fail
+  // (a real malloc): on failure frameBuffer stays null and the caller must
+  // recover (free transients + retry, then restart as a last resort).
+  if (!display.reallocFrameBufferStorage()) {
+    LOG_ERR("GFX", "restoreFrameBufferAfterNetwork: realloc failed (OOM)");
+    frameBuffer = nullptr;
+    return false;
+  }
+  // Buffer came back white; caller must fully redraw (same contract as the loan).
+  frameBuffer = display.getFrameBuffer();
+  return frameBuffer != nullptr;
+}
+#endif
+
 GfxRenderer::FrameBufferLoan::FrameBufferLoan(GfxRenderer& renderer) : renderer_(renderer) {
   // Nesting guard: if the framebuffer is already lent out (an outer loan),
   // stay inert so this end() cannot return storage the outer loan still owns.
@@ -677,6 +713,16 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
                              const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                              const bool pixelState, const EpdFontFamily::Style style) {
   if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
+  // Lingua: words tagged with TRANSLATED render at the configured gray level.
+  // 0 = black (default, unchanged behavior); 1 = dark gray; 2 = light gray.
+  // A per-role ink set by the line being drawn (PageLine::render -> ForcedInkScope) OVERRIDES the
+  // per-word bit, including with 0: a Lingua colour is a property of the whole line, and "black"
+  // has to be able to win over an inherited TRANSLATED bit. INK_INHERIT means no line asked.
+  const uint8_t forcedInk = renderer.getForcedInk();
+  const bool isTranslated = (style & EpdFontFamily::TRANSLATED) != 0;
+  const uint8_t effectiveGrayLevel =
+      forcedInk != GfxRenderer::INK_INHERIT ? forcedInk : (isTranslated ? renderer.getTranslationGrayLevel() : 0);
+
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) return;
 
@@ -692,6 +738,33 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   // pixel offset from the (already-shifted) cursor position.
   const int baseX = cursorX + glyph->left / 2;
   const int baseY = cursorY - glyph->top / 2;
+
+  // Per-pass paint helper. When effectiveGrayLevel == 0 we use the legacy path
+  // (unconditional paint with pixelState) to keep behavior bit-identical for
+  // non-translated text. Otherwise we honor BW + gray fallback semantics that
+  // mirror renderCharImpl's translated-text logic. Band clipping is handled
+  // downstream by drawPixel() (strip target), so no extra culling is needed here.
+  auto paintInk = [&](int x, int y) {
+    if (effectiveGrayLevel == 0) {
+      renderer.drawPixel(x, y, pixelState);
+      return;
+    }
+    if (effectiveGrayLevel == 1) {
+      // Dark gray: BW fallback + both gray passes.
+      if (renderMode == GfxRenderer::BW) {
+        renderer.drawPixel(x, y, pixelState);
+      } else {
+        renderer.drawPixel(x, y, false);
+      }
+    } else if (effectiveGrayLevel == 2) {
+      // Light gray: BW fallback + MSB only.
+      if (renderMode == GfxRenderer::BW) {
+        renderer.drawPixel(x, y, pixelState);
+      } else if (renderMode == GfxRenderer::GRAYSCALE_MSB) {
+        renderer.drawPixel(x, y, false);
+      }
+    }
+  };
 
   if (fontData->is2Bit) {
     // 2-bit packed format: 4 pixels per byte, MSB first, 2 bits per pixel.
@@ -712,7 +785,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (maxRaw >= 2 || coverage >= 2) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          paintInk(baseX + dstX, baseY + dstY);
         }
       }
     }
@@ -734,7 +807,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (hasInk) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          paintInk(baseX + dstX, baseY + dstY);
         }
       }
     }
@@ -809,6 +882,15 @@ template <TextRotation rotation = TextRotation::None>
 static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                            const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                            const bool pixelState, const EpdFontFamily::Style style) {
+  // Lingua: words tagged with TRANSLATED render at the configured gray level.
+  // 0 = black (default, normal antialiased path); 1 = dark gray; 2 = light gray.
+  // Per-role ink wins over the style bit; see the matching comment in renderCharScaled(). Both
+  // glyph paths must agree, or a scaled SUP/SUB inside a coloured line would stay black.
+  const uint8_t forcedInk = renderer.getForcedInk();
+  const bool isTranslated = (style & EpdFontFamily::TRANSLATED) != 0;
+  const uint8_t effectiveGrayLevel =
+      forcedInk != GfxRenderer::INK_INHERIT ? forcedInk : (isTranslated ? renderer.getTranslationGrayLevel() : 0);
+
   if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
   const auto glyphData = fontFamily.getGlyphData(cp, style);
   const EpdGlyph* glyph = glyphData.glyph;
@@ -876,17 +958,39 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
           const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
 
-          if (renderMode == GfxRenderer::BW && bmpVal < 3) {
-            // Black (also paints over the grays in BW mode)
-            renderer.drawPixel(screenX, screenY, pixelState);
-          } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-            // Light gray (also mark the MSB if it's going to be a dark gray too)
-            // Dedicated X3 gray LUTs now provide proper 4-level gray on both devices
-            // We have to flag pixels in reverse for the gray buffers, as 0 leave alone, 1 update
-            renderer.drawPixel(screenX, screenY, false);
-          } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
-            // Dark gray
-            renderer.drawPixel(screenX, screenY, false);
+          if (effectiveGrayLevel == 0) {
+            // Default path: render normally with font antialiasing.
+            if (renderMode == GfxRenderer::BW && bmpVal < 3) {
+              // Black (also paints over the grays in BW mode)
+              renderer.drawPixel(screenX, screenY, pixelState);
+            } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
+              // Light gray (also mark the MSB if it's going to be a dark gray too)
+              // Dedicated X3 gray LUTs now provide proper 4-level gray on both devices
+              // We have to flag pixels in reverse for the gray buffers, as 0 leave alone, 1 update
+              renderer.drawPixel(screenX, screenY, false);
+            } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
+              // Dark gray
+              renderer.drawPixel(screenX, screenY, false);
+            }
+          } else if (effectiveGrayLevel == 1) {
+            // Dark gray translated text: paint full glyph coverage (bmpVal < 3) in BW as a
+            // fallback so the word stays visible if the gray overlay never renders, then mark
+            // both LSB and MSB so the gray pass paints dark gray on top.
+            if (renderMode == GfxRenderer::BW && bmpVal < 3) {
+              renderer.drawPixel(screenX, screenY, pixelState);
+            } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && bmpVal < 3) {
+              renderer.drawPixel(screenX, screenY, false);
+            } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal < 3) {
+              renderer.drawPixel(screenX, screenY, false);
+            }
+          } else if (effectiveGrayLevel == 2) {
+            // Light gray translated text: BW fallback + MSB only (LSB skipped). On X3/X4 LUTs
+            // MSB-only flagged pixels resolve to light gray.
+            if (renderMode == GfxRenderer::BW && bmpVal < 3) {
+              renderer.drawPixel(screenX, screenY, pixelState);
+            } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && bmpVal < 3) {
+              renderer.drawPixel(screenX, screenY, false);
+            }
           }
         }
       }
@@ -908,7 +1012,23 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           const uint8_t bit_index = 7 - (pixelPosition & 7);
 
           if ((byte >> bit_index) & 1) {
-            renderer.drawPixel(screenX, screenY, pixelState);
+            if (effectiveGrayLevel == 0) {
+              renderer.drawPixel(screenX, screenY, pixelState);
+            } else if (effectiveGrayLevel == 1) {
+              // Dark gray: BW fallback + both gray passes.
+              if (renderMode == GfxRenderer::BW) {
+                renderer.drawPixel(screenX, screenY, pixelState);
+              } else {
+                renderer.drawPixel(screenX, screenY, false);
+              }
+            } else if (effectiveGrayLevel == 2) {
+              // Light gray: BW fallback + MSB only.
+              if (renderMode == GfxRenderer::BW) {
+                renderer.drawPixel(screenX, screenY, pixelState);
+              } else if (renderMode == GfxRenderer::GRAYSCALE_MSB) {
+                renderer.drawPixel(screenX, screenY, false);
+              }
+            }
           }
         }
       }
@@ -2301,6 +2421,17 @@ void GfxRenderer::clearScreen(const uint8_t color) const {
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
     return;
   }
+  // Guard: the SDK clearScreen memset()s the raw framebuffer with no null check,
+  // so this would crash while the buffer is released for a network phase. The
+  // primary guard is the translator render() no-op; this is defense-in-depth.
+  if (!frameBuffer) {
+    static bool logged = false;
+    if (!logged) {
+      LOG_ERR("GFX", "clearScreen while framebuffer released - no-op");
+      logged = true;
+    }
+    return;
+  }
   display.clearScreen(color);
 }
 
@@ -2388,6 +2519,16 @@ void GfxRenderer::invertRect(const int x, const int y, const int width, const in
 }
 
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode, const bool turnOffScreen) const {
+  // Guard: the SDK hands the raw framebuffer pointer to the panel driver with no null check, so
+  // pushing while the buffer is released for a Lingua network phase would crash.
+  if (!frameBuffer) {
+    static bool logged = false;
+    if (!logged) {
+      LOG_ERR("GFX", "displayBuffer while framebuffer released - no-op");
+      logged = true;
+    }
+    return;
+  }
   display.displayBuffer(refreshMode, fadingFix || turnOffScreen);
 }
 
@@ -2425,6 +2566,14 @@ void GfxRenderer::writeFramebufferRegion(uint16_t x, uint16_t y, uint16_t w, uin
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
+  if (!frameBuffer) {
+    static bool logged = false;
+    if (!logged) {
+      LOG_ERR("GFX", "displayBufferAsync while framebuffer released - no-op");
+      logged = true;
+    }
+    return;
+  }
   // The async path has no turn-off-screen hook, which the sunlight fading fix
   // relies on; keep those users on the blocking path.
   if (fadingFix) {

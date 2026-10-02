@@ -78,6 +78,9 @@
 #include "util/BookMoveUtils.h"
 #include "util/Dictionary.h"
 #include "util/ScreenshotUtil.h"
+#include "modules/lingua/activities/BookTranslationActivity.h"
+#include "modules/lingua/activities/ChapterTranslationActivity.h"
+#include "modules/lingua/activities/LinguaSubmenuActivity.h"
 
 namespace {
 constexpr unsigned long TOUCH_DICTIONARY_LOOKUP_HOLD_MS = 1000;
@@ -2283,6 +2286,7 @@ void EpubReaderActivity::onEnter() {
 }
 
 void EpubReaderActivity::onExit() {
+  lingua.onReaderExit();
   sdFontSystem.setSettingsPersistenceCallback(nullptr, nullptr);
   clearPendingManualPageTurns(/*requestRecoveryRedraw=*/false);
   mappedInput.setReaderTouchscreenOverride(false);
@@ -2610,7 +2614,7 @@ void EpubReaderActivity::idlePrewarmNextPage() {
 
   const unsigned long startedAt = millis();
   auto scope = fcm->createPrewarmScope();
-  page->renderText(renderer, renderFontId, 0, 0);
+  page->renderText(renderer, linguaPageFonts(renderFontId), 0, 0);
   scope.endScanAndPrewarm();
   LOG_DBG("ERS", "Idle SD font prewarm: spine=%d page=%d in %lums", currentSpineIndex, nextPage, millis() - startedAt);
 }
@@ -2663,6 +2667,20 @@ void EpubReaderActivity::loop() {
   }
 #endif
 
+  // CrossLingua touch sentence selection (hold, then drag): must see the contact before the
+  // page-turn / dictionary handling below, which would otherwise read the drag as a swipe.
+  if (!activeFootnotePreview && !RenderLock::peek()) {
+    switch (lingua.handleTouchSelection(mappedInput, section != nullptr)) {
+      case LinguaReaderIntegration::InputAction::Consumed:
+        return;
+      case LinguaReaderIntegration::InputAction::Render:
+        requestUpdate();
+        return;
+      default:
+        break;
+    }
+  }
+
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   if (touch.tapped &&
       ReaderUtils::isBottomStatusBarTap(renderer, touch.y, UITheme::getInstance().getStatusBarHeight())) {
@@ -2706,6 +2724,26 @@ void EpubReaderActivity::loop() {
     return;
   }
 #endif
+
+  // CrossLingua extension point: overlay-specific input (tooltip stepping, Page Translation overlay,
+  // Interlinear toggle, the per-chapter fallback dialog) lives in LinguaReaderIntegration.
+  if (!activeFootnotePreview && !RenderLock::peek()) {
+    switch (lingua.handleInput(mappedInput, section != nullptr)) {
+      case LinguaReaderIntegration::InputAction::Consumed:
+        return;
+      case LinguaReaderIntegration::InputAction::Render:
+        requestUpdate();
+        return;
+      case LinguaReaderIntegration::InputAction::PageBack:
+        if (section) pageTurn(false, "lingua");
+        return;
+      case LinguaReaderIntegration::InputAction::PageForward:
+        if (section) pageTurn(true, "lingua");
+        return;
+      case LinguaReaderIntegration::InputAction::None:
+        break;
+    }
+  }
 
   // Lazily resume a partial's extension build once the reader nears its watermark. Far from it the
   // rebuild is all cost (whole-chapter re-layout from page 0) and no benefit this session.
@@ -4108,6 +4146,36 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           });
       break;
     }
+    case EpubReaderMenuActivity::MenuAction::LINGUA: {
+      const ReaderRenderSpec before = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+      startActivityForResult(
+          std::make_unique<LinguaSubmenuActivity>(renderer, mappedInput, epub, currentSpineIndex),
+          [this, before](const ActivityResult& result) {
+            LinguaResult translation = LinguaResult::NONE;
+            if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
+              if (menu->action == static_cast<int>(LinguaResult::TRANSLATE_CHAPTER) ||
+                  menu->action == static_cast<int>(LinguaResult::TRANSLATE_BOOK)) {
+                translation = static_cast<LinguaResult>(menu->action);
+              }
+            }
+            if (translation != LinguaResult::NONE) {
+              launchTranslation(translation);
+              return;
+            }
+            // A display-mode / translation-size change that alters the page layout re-lays out the
+            // chapter, keeping the reading position.
+            if (!SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight).layoutEquals(before)) {
+              RenderLock lock(*this);
+              if (section) {
+                prepareCurrentSectionForRelayout();
+                section.reset();
+              }
+            }
+            lingua.onPageChanged();
+            requestUpdate();
+          });
+      break;
+    }
     case EpubReaderMenuActivity::MenuAction::AUTO_PAGE_TURN:
       openAutoPageTurnIntervalPicker(false, returnToReaderMenu);
       break;
@@ -4116,6 +4184,41 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::CONTROLS_OPTIONS:
       break;
   }
+}
+
+void EpubReaderActivity::launchTranslation(const LinguaResult kind) {
+  if (!epub) return;
+  const std::string epubPath = epub->getPath();
+  const int spineIndex = currentSpineIndex;
+  const std::string translatedPath =
+      epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + ".translated.html";
+  const bool alreadyTranslated = Storage.exists(translatedPath.c_str());
+  const int page = section ? section->currentPage : nextPageNumber;
+  const int totalPages = section ? section->estimatedTotalPages() : cachedChapterTotalPageCount;
+  saveProgress(spineIndex, page, totalPages);
+
+  lingua.onReaderExit();
+  {
+    RenderLock lock(*this);
+    ImageBlock::setExtractor(nullptr, nullptr, nullptr);
+    section.reset();
+  }
+  if (kind == LinguaResult::TRANSLATE_BOOK) {
+    activityManager.replaceActivity(std::make_unique<BookTranslationActivity>(renderer, mappedInput, epubPath));
+  } else {
+    activityManager.replaceActivity(std::make_unique<ChapterTranslationActivity>(
+        renderer, mappedInput, epubPath, spineIndex, translatedPath, alreadyTranslated));
+  }
+}
+
+PageFontSet EpubReaderActivity::linguaPageFonts(const int bodyFontId) const {
+  // The section may have been laid out with a fallback body font (safe mode / SD font recovery):
+  // re-anchor the role slots that resolved to the settings body font onto the actual one.
+  PageFontSet fonts = lingua.pageFontSet();
+  if (fonts.translation == fonts.body) fonts.translation = bodyFontId;
+  if (fonts.annotation == fonts.body) fonts.annotation = bodyFontId;
+  fonts.body = bodyFontId;
+  return fonts;
 }
 
 std::unique_ptr<Activity> EpubReaderActivity::createFrontlightReadingStatsActivity() {
@@ -5570,6 +5673,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
     pokemonService.onSuccessfulPageTurn(millis());
   }
 #endif
+  lingua.onPageChanged();
   lastPageTurnTime = millis();
   requestUpdate();
 }
@@ -5716,6 +5820,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         LOG_ERR("ERS", "Failed to allocate section for spine %d (font=%d, free=%u, maxAlloc=%u)", currentSpineIndex,
                 fontId, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         return false;
+      }
+      // CrossLingua per-chapter fallback: a translation display mode on a chapter with no
+      // translation downgrades to Normal (and shows a one-shot dialog) before the spec is built.
+      if (!buildingFootnotePreview) {
+        lingua.prepareSection(*section);
       }
       const ReaderRenderSpec spec =
           readerRenderSpecForProfile(fontId, viewportWidth, viewportHeight, buildProfileForRenderMode(renderMode));
@@ -6259,6 +6368,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
 
   renderer.clearScreen(ReaderUtils::readerBackgroundColor());
+
+  if (lingua.fallbackDialogActive()) {
+    lingua.drawFallbackDialog(renderer, mappedInput);
+    return;
+  }
+  lingua.onSectionChanged(section->getTranslatedHtmlPath());
 
   if (section->pageCount == 0) {
     LOG_DBG("ERS", "No pages to render");
@@ -6862,14 +6977,21 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
     }
   }
 #endif
+  // CrossLingua: the page's font set (body, smaller translated text, Interlinear annotation rows) and
+  // the view-time overlays (Tooltip / Page Translation).
+  const PageFontSet fonts = linguaPageFonts(fontId);
+  const bool linguaOverlayPrewarmed = lingua.prepareOverlayFonts(
+      renderer, *page, fonts, currentSpineIndex, section ? section->currentPage : -1, orientedMarginLeft,
+      orientedMarginTop);
+
   // Font prewarm: scan pass accumulates text, then prewarm, then real render.
   // SD fonts depend on the prepared bitmap cache; drawing after a failed
   // prewarm would turn every unavailable glyph into a replacement symbol.
   std::optional<FontCacheManager::PrewarmScope> pageRenderScope;
-  if (auto* fcm = renderer.getFontCacheManager()) {
+  if (auto* fcm = linguaOverlayPrewarmed ? nullptr : renderer.getFontCacheManager()) {
     const auto prewarmVisibleText = [&]() {
       pageRenderScope.emplace(*fcm, FontCacheManager::PreparationPolicy::Normal);
-      page->renderText(renderer, fontId, orientedMarginLeft, orientedMarginTop);  // scan pass
+      page->renderText(renderer, fonts, orientedMarginLeft, orientedMarginTop);  // scan pass
       // The status-bar title can route to the same SD fallback as the page. Scan
       // it into this batch before rendering so it does not evict page glyphs.
       renderStatusBar();
@@ -6901,7 +7023,7 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   const bool pageHasImages = page->hasImages();
   const bool foregroundBlack = ReaderUtils::readerForegroundBlack();
   bool needsImageGrayscale = pageHasImages;
-  bool needsTextGrayscale = SETTINGS.textAntiAliasing && foregroundBlack;
+  bool needsTextGrayscale = SETTINGS.textAntiAliasing && foregroundBlack && !lingua.pageTranslationActive();
   const int contentBottom = renderer.getScreenHeight() - orientedMarginBottom;
 
   // The pending count excludes the page currently being rendered. Decide
@@ -6940,24 +7062,24 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
 
   const auto composePageBuffer = [&]() {
     if (deferImageLoading) {
-      page->renderWithImagePlaceholders(renderer, fontId, orientedMarginLeft, orientedMarginTop, foregroundBlack,
+      page->renderWithImagePlaceholders(renderer, fonts, orientedMarginLeft, orientedMarginTop, foregroundBlack,
                                         /*renderCachedImages=*/false);
     } else {
-      page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, foregroundBlack);
+      page->render(renderer, fonts, orientedMarginLeft, orientedMarginTop, foregroundBlack);
     }
     finalizeBufferComposition();
   };
 
   const auto composeGrayscaleBuffer = [&]() {
     if (needsTextGrayscale) {
-      page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, foregroundBlack);
+      page->render(renderer, fonts, orientedMarginLeft, orientedMarginTop, foregroundBlack);
     } else {
-      page->renderImages(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+      page->renderImages(renderer, fonts, orientedMarginLeft, orientedMarginTop);
     }
     finalizeBufferComposition();
   };
   if (updatePanel && pageHasImagesNeedingDecode) {
-    page->renderWithImagePlaceholders(renderer, fontId, orientedMarginLeft, orientedMarginTop, foregroundBlack);
+    page->renderWithImagePlaceholders(renderer, fonts, orientedMarginLeft, orientedMarginTop, foregroundBlack);
     finalizeBufferComposition();
     renderStatusBar();
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -6973,7 +7095,11 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
     renderer.clearScreen(ReaderUtils::readerBackgroundColor());
   }
   composePageBuffer();
+  lingua.renderOverlay(renderer, *page, orientedMarginLeft, orientedMarginTop,
+                       renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight,
+                       renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom);
   renderStatusBar();
+  lingua.drawTransientUi(renderer);
   if (pendingBookmarkFeedback) {
     const char* msg = tr(STR_BOOKMARK_ADDED);
     switch (bookmarkFeedbackType) {

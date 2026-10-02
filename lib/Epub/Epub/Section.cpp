@@ -15,6 +15,7 @@
 #include "Page.h"
 #include "SectionPageIndexSerialization.h"
 #include "hyphenation/Hyphenator.h"
+#include "modules/lingua/services/TranslatedContentDetector.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
@@ -27,12 +28,21 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // v75: HTML hidden attributes suppress content in all reading modes.
 // v76: Paragraphs without source CSS indentation no longer receive a synthetic indent.
 // v77: Ordered lists, marker suppression, and list-container insets affect page layout.
-constexpr uint8_t SECTION_FILE_VERSION = 77;
+// v78: CrossLingua integration -- header carries the Lingua translation/annotation font ids, the
+//      LinguaLayout byte and the translated-source flag + embedded-translation memo; each line
+//      persists a paragraph index and LineFontRole, each page a paragraph range; word styles are
+//      16 bits wide (SMALL_CAPS moved to bit 8, TRANSLATED is bit 6).
+constexpr uint8_t SECTION_FILE_VERSION = 78;
 // Suspended incremental build: valid pages plus LUTs and a parse-watermark trailer.
 // Change this with layout or payload changes so stale partial pages cannot resume
 // under a different layout contract.
-constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xF3;
+constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xF2;
+// The two extra sizeof(int) are the Lingua translation/annotation font ids; the trailing
+// uint8_t + bool + bool before pageCount are the LinguaLayout byte, translatedSource and the
+// embeddedTranslation memo. All sit BEFORE pageCount, so every seek relative to HEADER_SIZE's tail
+// (page count, LUT offsets) is unaffected.
 constexpr uint32_t HEADER_SIZE =
+    sizeof(int) + sizeof(int) + sizeof(uint8_t) + sizeof(bool) + sizeof(bool) +
     sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
     sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) +
     sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint32_t) +
@@ -59,6 +69,18 @@ size_t sectionHtmlStreamChunkSize(const bool preview) {
     return LOW_MEMORY_SECTION_HTML_STREAM_CHUNK_SIZE;
   }
   return SECTION_HTML_STREAM_CHUNK_SIZE;
+}
+
+// Lingua: the translation font belongs in the cache key only where translated words are actually
+// laid out IN IT, which is the Both layout and only Both. Applied to the header write, the lookup AND
+// the id handed to the parser, so key and layout can never disagree.
+constexpr int keyedTranslationFontId(const int translationFontId, const LinguaLayout effectiveLayout) {
+  return effectiveLayout == LinguaLayout::Both ? translationFontId : 0;
+}
+
+// Same rule for the annotation font: it only reaches a page under Interlinear.
+constexpr int keyedAnnotationFontId(const int annotationFontId, const LinguaLayout effectiveLayout) {
+  return effectiveLayout == LinguaLayout::Interlinear ? annotationFontId : 0;
 }
 
 std::string sectionBackupPath(const std::string& filePath) { return filePath + ".bak"; }
@@ -193,7 +215,8 @@ void Section::releaseBuildFile() {
   }
 }
 
-bool Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
+bool Section::writeSectionFileHeader(const ReaderRenderSpec& spec, const bool translatedSource,
+                                     const bool embeddedTranslation) {
   if (!file) {
     LOG_DBG("SCT", "File not open for writing header");
     return false;
@@ -205,7 +228,9 @@ bool Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
                                    sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
                                    sizeof(spec.guideReadingEnabled) + sizeof(spec.wordSpacing) + sizeof(uint8_t) +
-                                   sizeof(pageCount) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                   sizeof(spec.translationFontId) + sizeof(spec.annotationFontId) +
+                                   sizeof(uint8_t) /* LinguaLayout */ + sizeof(translatedSource) +
+                                   sizeof(embeddedTranslation) + sizeof(pageCount) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   return serialization::tryWritePod(file, SECTION_CACHE_MAGIC) &&
@@ -223,6 +248,12 @@ bool Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
          serialization::tryWritePod(file, spec.guideReadingEnabled) &&
          serialization::tryWritePod(file, spec.wordSpacing) &&
          serialization::tryWritePod(file, static_cast<uint8_t>(spec.renderMode)) &&
+         // Lingua cache-key fields. embeddedTranslation is NOT a key: it memoizes the immutable
+         // "chapter XHTML embeds translations" half of translatedSource so a load needs no scan.
+         serialization::tryWritePod(file, spec.translationFontId) &&
+         serialization::tryWritePod(file, spec.annotationFontId) &&
+         serialization::tryWritePod(file, static_cast<uint8_t>(spec.linguaLayout)) &&
+         serialization::tryWritePod(file, translatedSource) && serialization::tryWritePod(file, embeddedTranslation) &&
          serialization::tryWritePod(file,
                                     pageCount) &&  // Placeholder for page count (will be initially 0, patched later)
          serialization::tryWritePod(file, static_cast<uint32_t>(0)) &&  // Protected image units (patched later)
@@ -287,6 +318,11 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     bool fileGuideReadingEnabled;
     uint8_t fileWordSpacing;
     uint8_t fileRenderMode;
+    int fileTranslationFontId;
+    int fileAnnotationFontId;
+    uint8_t fileLinguaLayout;
+    bool fileTranslatedSource;
+    bool fileEmbeddedTranslation;
     if (!serialization::tryReadPod(file, fileFontId) || !serialization::tryReadPod(file, fileLineCompression) ||
         !serialization::tryReadPod(file, fileExtraParagraphSpacing) ||
         !serialization::tryReadPod(file, fileForceParagraphIndents) ||
@@ -296,12 +332,34 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         !serialization::tryReadPod(file, fileEmbeddedStyle) || !serialization::tryReadPod(file, fileImageRendering) ||
         !serialization::tryReadPod(file, fileFocusReadingEnabled) ||
         !serialization::tryReadPod(file, fileGuideReadingEnabled) ||
-        !serialization::tryReadPod(file, fileWordSpacing) || !serialization::tryReadPod(file, fileRenderMode)) {
+        !serialization::tryReadPod(file, fileWordSpacing) || !serialization::tryReadPod(file, fileRenderMode) ||
+        !serialization::tryReadPod(file, fileTranslationFontId) ||
+        !serialization::tryReadPod(file, fileAnnotationFontId) || !serialization::tryReadPod(file, fileLinguaLayout) ||
+        !serialization::tryReadPod(file, fileTranslatedSource) ||
+        !serialization::tryReadPod(file, fileEmbeddedTranslation)) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: truncated section header");
       clearCache();
       return false;
     }
+
+    // Lingua: recompute translatedSource from its two independent halves (a sidecar stat plus the
+    // previous build's immutable embedded-translation memo) instead of re-scanning the chapter HTML,
+    // and match on the EFFECTIVE (post-fallback) layout the build stamped.
+    const bool hasSidecar = hasTranslatedSidecar();
+    const bool translatedSource = hasSidecar || fileEmbeddedTranslation;
+    // Only adopt it as the memoized answer when it is exact: a build that read the sidecar stamped
+    // embedded=false without looking, so if that sidecar is gone the value may understate the truth.
+    const bool embeddedIsKnown = fileEmbeddedTranslation || !fileTranslatedSource;
+    if (hasSidecar || embeddedIsKnown) {
+      translationPresence_ = translatedSource ? TranslationPresence::Yes : TranslationPresence::No;
+    }
+    translatedSource_ = translatedSource;
+    const LinguaLayout layout = effectiveLayout(spec.linguaLayout, translatedSource);
+    const bool linguaKeyMatches = keyedTranslationFontId(spec.translationFontId, layout) == fileTranslationFontId &&
+                                  keyedAnnotationFontId(spec.annotationFontId, layout) == fileAnnotationFontId &&
+                                  static_cast<uint8_t>(layout) == fileLinguaLayout &&
+                                  translatedSource == fileTranslatedSource;
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing ||
@@ -310,7 +368,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
         spec.guideReadingEnabled != fileGuideReadingEnabled || spec.wordSpacing != fileWordSpacing ||
-        static_cast<uint8_t>(spec.renderMode) != fileRenderMode) {
+        static_cast<uint8_t>(spec.renderMode) != fileRenderMode || !linguaKeyMatches) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();
@@ -386,6 +444,12 @@ bool Section::clearCache() const {
   const std::string backupPath = sectionBackupPath(filePath);
   if (Storage.exists(backupPath.c_str())) {
     Storage.remove(backupPath.c_str());
+  }
+  // Lingua: remove a stale partial translation left by an interrupted run. The completed translated
+  // HTML is intentionally preserved so translations survive .bin cache invalidation.
+  const auto translationPartPath = getTranslatedHtmlPath() + ".part";
+  if (Storage.exists(translationPartPath.c_str())) {
+    Storage.remove(translationPartPath.c_str());
   }
   if (!Storage.exists(filePath.c_str())) {
     return true;
@@ -523,7 +587,14 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
       LOG_DBG("SCT", "Failed to promote HTML cache; parsing from temp");
     }
   }
-  const std::string& parsePath = htmlCached ? htmlPath : tmpHtmlPath;
+  // Lingua: prefer the reader-produced bilingual sidecar when present, and resolve the chapter's
+  // translation presence (cache key) off the same file the parser will read.
+  std::string parsePath;
+  ReaderRenderSpec linguaSpec;
+  bool translatedSource = false;
+  bool embeddedTranslation = false;
+  resolveLinguaBuildSource(spec, htmlCached ? htmlPath : tmpHtmlPath, parsePath, linguaSpec, translatedSource,
+                           embeddedTranslation);
 
   if (cancelBuild()) {
     LOG_DBG("SCT", "Section build cancelled after HTML inflate: spine=%d", spineIndex);
@@ -539,10 +610,10 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
     cleanupTempHtml();
     return false;
   }
-  ReaderRenderSpec effectiveSpec = spec;
+  ReaderRenderSpec effectiveSpec = linguaSpec;
   effectiveSpec.focusReadingEnabled = effectiveFocusReadingEnabled;
   effectiveSpec.guideReadingEnabled = effectiveGuideReadingEnabled;
-  if (!writeSectionFileHeader(effectiveSpec)) {
+  if (!writeSectionFileHeader(effectiveSpec, translatedSource, embeddedTranslation)) {
     LOG_ERR("SCT", "Failed to write section header");
     file.close();
     Storage.remove(tmpSectionPath.c_str());
@@ -626,7 +697,12 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser, renderMode,
       buildOptions.isPreview() ? std::string(buildOptions.previewAnchor) : std::string{}, buildOptions.previewMaxPages,
       buildOptions.referenceUnitsAreCharacters);
+  visitor.configureLingua(effectiveSpec.linguaLayout, epub->getLanguage(), effectiveSpec.translationFontId,
+                          effectiveSpec.annotationFontId, spec.interlinearPairFn);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
+  // Clear any translated-language slot left by a previous build; the parser repopulates it from
+  // each translated block's lang= as it parses, so it never leaks across books/sections.
+  Hyphenator::setTranslatedLanguage("");
   bool cancelled = false;
   bool success = false;
   if (cancelBuild()) {
@@ -856,11 +932,18 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
     }
   }
 
+  std::string linguaParsePath;
+  ReaderRenderSpec effectiveSpec;
+  bool translatedSource = false;
+  bool embeddedTranslation = false;
+  resolveLinguaBuildSource(spec, htmlCached ? htmlPath : tmpHtmlPath, linguaParsePath, effectiveSpec,
+                           translatedSource, embeddedTranslation);
+
   if (!Storage.openFileForWrite("SCT", tmpSectionPath, file)) {
     cleanupTempHtml();
     return false;
   }
-  if (!writeSectionFileHeader(spec)) {
+  if (!writeSectionFileHeader(effectiveSpec, translatedSource, embeddedTranslation)) {
     LOG_ERR("SCT", "Failed to write section header");
     file.close();
     Storage.remove(tmpSectionPath.c_str());
@@ -881,7 +964,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
   ctx->htmlPath = htmlPath;
   ctx->tmpHtmlPath = tmpHtmlPath;
   ctx->tmpSectionPath = tmpSectionPath;
-  ctx->parsePath = htmlCached ? htmlPath : tmpHtmlPath;
+  ctx->parsePath = linguaParsePath;
 
   const size_t lastSlash = localPath.find_last_of('/');
   ctx->contentBase = (lastSlash != std::string::npos) ? localPath.substr(0, lastSlash + 1) : "";
@@ -950,6 +1033,10 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
       embeddedStyle, ctxPtr->contentBase, ctxPtr->imageBasePath, imageRendering, std::move(tocAnchors), popupFn,
       ctxPtr->cssParser, renderMode, buildOptions.isPreview() ? std::string(buildOptions.previewAnchor) : std::string{},
       buildOptions.previewMaxPages, false);
+  if (ctx->parser) {
+    ctx->parser->configureLingua(effectiveSpec.linguaLayout, epub->getLanguage(), effectiveSpec.translationFontId,
+                                 effectiveSpec.annotationFontId, spec.interlinearPairFn);
+  }
   if (!ctx->parser) {
     LOG_ERR("SCT", "Failed to allocate section parser");
     lastLayoutAbortedForLowMemory_ = true;
@@ -961,6 +1048,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
   }
 
   Hyphenator::setPreferredLanguage(epub->getLanguage());
+  Hyphenator::setTranslatedLanguage("");
   build_ = std::move(ctx);
   if (!build_->parser->beginParse()) {
     LOG_ERR("SCT", "Failed to begin incremental section parse");
@@ -1011,9 +1099,87 @@ bool Section::buildSomeMore(const int maxPages) {
   }
 }
 
-bool Section::hasHtmlCache() const {
-  const std::string htmlPath = epub->getCachePath() + "/html/" + std::to_string(spineIndex) + ".html";
-  return Storage.exists(htmlPath.c_str());
+bool Section::hasHtmlCache() const { return Storage.exists(getCachedHtmlPath().c_str()); }
+
+void Section::resolveLinguaBuildSource(const ReaderRenderSpec& spec, const std::string& chapterHtmlPath,
+                                       std::string& outParsePath, ReaderRenderSpec& outEffectiveSpec,
+                                       bool& outTranslatedSource, bool& outEmbeddedTranslation) {
+  // Which file do I parse: the committed bilingual sidecar (atomic ".part" -> rename write, never a
+  // partial) when the translator produced one, otherwise the chapter's own HTML.
+  const bool usingTranslatedSidecar = hasTranslatedSidecar();
+  outParsePath = usingTranslatedSidecar ? getTranslatedHtmlPath() : chapterHtmlPath;
+  outEmbeddedTranslation = false;
+  if (usingTranslatedSidecar) {
+    LOG_DBG("SCT", "Using translated HTML: %s", outParsePath.c_str());
+    outTranslatedSource = true;  // a committed sidecar is bilingual by construction; no scan needed
+  } else if (translationPresence_ != TranslationPresence::Unknown) {
+    // Already resolved over this same file (reader fallback gate, or a previous build).
+    outTranslatedSource = translationPresence_ == TranslationPresence::Yes;
+    outEmbeddedTranslation = outTranslatedSource;
+  } else {
+    bool textless = false;
+    outEmbeddedTranslation = lingua::content::htmlHasTranslatedBlock(outParsePath, epub->getLanguage(), &textless);
+    outTranslatedSource = outEmbeddedTranslation;
+    translationPresence_ = outTranslatedSource ? TranslationPresence::Yes : TranslationPresence::No;
+    textPresence_ = textless ? TextPresence::Textless : TextPresence::HasText;
+  }
+  translatedSource_ = outTranslatedSource;
+
+  // Per-chapter auto-fallback: a filtering layout on a chapter with no translated content would
+  // render a blank chapter, so lay it out as Both. Layout/cache-key decision only.
+  const LinguaLayout effectiveLinguaLayout = effectiveLayout(spec.linguaLayout, outTranslatedSource);
+  if (effectiveLinguaLayout != spec.linguaLayout) {
+    LOG_DBG("SCT", "No translation for spine %d; laying out with the Both layout", spineIndex);
+  }
+  outEffectiveSpec = spec;
+  outEffectiveSpec.linguaLayout = effectiveLinguaLayout;
+  outEffectiveSpec.translationFontId = keyedTranslationFontId(spec.translationFontId, effectiveLinguaLayout);
+  outEffectiveSpec.annotationFontId = keyedAnnotationFontId(spec.annotationFontId, effectiveLinguaLayout);
+}
+
+bool Section::ensureChapterHtml(std::string& outParsePath, bool& outPromoted) {
+  const auto htmlDir = epub->getCachePath() + "/html";
+  const auto htmlPath = getCachedHtmlPath();
+  const auto tmpHtmlPath = htmlDir + "/.tmp_" + std::to_string(spineIndex) + ".html";
+
+  if (Storage.exists(htmlPath.c_str())) {
+    outParsePath = htmlPath;
+    outPromoted = true;
+    return true;
+  }
+
+  Storage.mkdir(htmlDir.c_str());
+  bool streamed = false;
+  for (int attempt = 0; attempt < 3 && !streamed; attempt++) {
+    if (attempt > 0) {
+      delay(50);
+    }
+    if (Storage.exists(tmpHtmlPath.c_str())) {
+      Storage.remove(tmpHtmlPath.c_str());
+    }
+    HalFile tmpHtml;
+    if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
+      continue;
+    }
+    streamed = epub->readItemContentsToStream(epub->getSpineItem(spineIndex).href, tmpHtml,
+                                              sectionHtmlStreamChunkSize(false));
+    tmpHtml.close();
+    if (!streamed && Storage.exists(tmpHtmlPath.c_str())) {
+      Storage.remove(tmpHtmlPath.c_str());
+    }
+  }
+  if (!streamed) {
+    LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
+    return false;
+  }
+  if (Storage.rename(tmpHtmlPath.c_str(), htmlPath.c_str())) {
+    outParsePath = htmlPath;
+    outPromoted = true;
+  } else {
+    outParsePath = tmpHtmlPath;
+    outPromoted = false;
+  }
+  return true;
 }
 
 std::optional<uint16_t> Section::findAnchorDuringBuild(const std::string& anchor) const {

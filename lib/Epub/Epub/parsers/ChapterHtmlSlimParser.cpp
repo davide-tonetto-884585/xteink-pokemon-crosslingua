@@ -28,8 +28,10 @@
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
+#include "Epub/hyphenation/Hyphenator.h"
 #include "Epub/tables/TableColumnLayout.h"
 #include "PreviewBlockLocator.h"
+#include "modules/lingua/services/TranslatedContentDetector.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
@@ -645,6 +647,16 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
     return;
   }
 
+  // Lingua: a <br>-opened block carries no language of its own; its first word settles it.
+  classifyBrOpenedBlock();
+  // Lingua: drop words of a block the active layout filters out, so they never reach layout. Reset
+  // continuation on drop: a dropped word must not attach to the next.
+  if (wordIsFiltered()) {
+    partWordBufferIndex = 0;
+    nextWordContinues = false;
+    return;
+  }
+
   // Determine font style from depth-based tracking and CSS effective style
   const bool isBold = boldUntilDepth < depth || effectiveBold;
   const bool isItalic = italicUntilDepth < depth || effectiveItalic;
@@ -672,6 +684,11 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   }
   if (effectiveSmallCaps) {
     fontStyle = static_cast<EpdFontFamily::Style>(fontStyle | EpdFontFamily::SMALL_CAPS);
+  }
+  // Lingua: tag translated words so the renderer can apply its translation gray level and the
+  // hyphenator can pick the translated language's rules.
+  if (inTranslatedText()) {
+    fontStyle = static_cast<EpdFontFamily::Style>(fontStyle | EpdFontFamily::TRANSLATED);
   }
 
   if (currentCompactTable && currentCompactTable->valid() && currentCompactTable->hasActiveCell()) {
@@ -742,8 +759,14 @@ void ChapterHtmlSlimParser::flushLongTextRunIfNeeded(const bool force) {
   // annotation and calculate its line-break constraints correctly.
   if (inRuby) return;
 
-  const size_t wordLimit = bufferedWordsBeforeLayoutLimit();
-  const uint16_t byteLimit = textRunBytesBeforeLayoutLimit();
+  // Lingua: under a PAIRED layout (SideBySide / Interlinear) the open block is an operand of a
+  // pairing, not a paragraph -- a mid-block flush would escape the pairing and push the prefix
+  // straight to the page. Hold such blocks to a much larger ceiling, keeping the flush only as the
+  // OOM backstop.
+  const bool pairedLayout = linguaLayout == LinguaLayout::SideBySide || linguaLayout == LinguaLayout::Interlinear;
+  const size_t wordLimit = pairedLayout ? DEFAULT_BUFFERED_WORDS_BEFORE_LAYOUT * 2 : bufferedWordsBeforeLayoutLimit();
+  const uint16_t byteLimit =
+      pairedLayout ? static_cast<uint16_t>(DEFAULT_TEXT_RUN_BYTES_BEFORE_LAYOUT * 4) : textRunBytesBeforeLayoutLimit();
   const size_t wordCount = currentTextBlock->size();
   if (!force && wordCount <= wordLimit && currentTextRunBytes <= byteLimit) {
     return;
@@ -752,11 +775,12 @@ void ChapterHtmlSlimParser::flushLongTextRunIfNeeded(const bool force) {
   const int horizontalInset = currentTextBlock->getBlockStyle().totalHorizontalInset();
   const uint16_t effectiveWidth =
       (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
+  // Same role/font pairing as makePages(): this is the SAME open block, just flushed early.
+  const LineFontRole role = currentLineRole();
   if (!currentTextBlock->layoutAndExtractLines(
-          renderer, fontId, effectiveWidth,
-          [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset, const uint32_t referenceOffset) {
-            addLineToPage(textBlock, offset, referenceOffset);
-          },
+          renderer, fontIdForRole(role), effectiveWidth,
+          [this, role](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset,
+                       const uint32_t referenceOffset) { addLineToPage(textBlock, role, offset, referenceOffset); },
           false)) {
     LOG_ERR("EHP", "Failed to lay out long text run");
     lowMemoryAbort = true;
@@ -798,9 +822,14 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       return;
     }
 
-    makePages();
+    // Lingua: the two PAIRING layouts route through their own builder. currentBlockIsTranslated
+    // and currentBlockParagraphIdx are stamped AFTER this flush by the caller, so here they still
+    // describe the block being flushed.
+    makePagesForLayout();
   }
   currentTextRunBytes = 0;
+  // Lingua: a fresh physical text block has not been assigned a paragraph index yet.
+  currentBlockIndexAssigned = false;
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
@@ -1765,6 +1794,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   std::string_view classAttr;
   std::string_view styleAttr;
   const char* dirAttr = nullptr;
+  const char* langAttr = nullptr;
   if (atts != nullptr) {
     for (int i = 0; atts[i]; i += 2) {
       const char* attrValue = atts[i + 1] ? atts[i + 1] : "";
@@ -1806,6 +1836,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       } else if (strcmp(atts[i], "dir") == 0) {
         dirAttr = attrValue;
+      } else if (strcmp(atts[i], "lang") == 0 || strcmp(atts[i], "xml:lang") == 0) {
+        langAttr = attrValue;
       }
     }
   }
@@ -2663,6 +2695,28 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
+  // Lingua: does this element introduce (or sit inside) a translated block? Skip html/body so a
+  // document-level lang never marks the whole chapter. The comparison is the SAME predicate Section's
+  // per-chapter "has translation" gate scans with, so gate and layout can never disagree.
+  const bool langTagAllowed = strcmp(name, "html") != 0 && strcmp(name, "body") != 0;
+  const bool isExplicitTranslated =
+      langTagAllowed && lingua::content::isTranslatedLangTag(langAttr, self->bookPrimaryLang.c_str());
+  if (isExplicitTranslated && !self->inTranslatedText()) {
+    // Flush the word preceding the state change with the previous (untranslated) style.
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+      self->nextWordContinues = !isHeaderOrBlock(name);
+    }
+    self->translatedFromDepth = self->depth;
+  }
+  const bool currentIsTranslated = self->inTranslatedText();
+  // Point the Hyphenator's translated slot at this block's language so its words hyphenate with
+  // their own script's rules. Guarded so it re-resolves only on change.
+  if (isExplicitTranslated && self->translatedHyphenLang != langAttr) {
+    self->translatedHyphenLang = langAttr;
+    Hyphenator::setTranslatedLanguage(langAttr);
+  }
+
   if (strcmp(name, "hr") == 0) {
     if (self->isLightMode()) {
       self->skipCurrentElement();
@@ -2722,6 +2776,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->startNewTextBlock(accumulated.withoutBottom());
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
+    // Lingua: stamp AFTER startNewTextBlock so the previous block was flushed under its own state.
+    self->stampLinguaBlockOpen(currentIsTranslated);
   } else if (matches(name, BLOCK_TAGS, std::size(BLOCK_TAGS)) || strcmp(name, "caption") == 0) {
     if (self->headingOpenerActive) {
       self->headingOpenerActive = false;
@@ -2765,6 +2821,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         self->startNewTextBlock(accumulated.withoutBottom());
       }
       self->updateEffectiveInlineStyle();
+      // Lingua: stamp AFTER startNewTextBlock (see the header branch).
+      self->stampLinguaBlockOpen(currentIsTranslated);
 
       if (strcmp(name, "li") == 0) {
         bool markerAdded = false;
@@ -3041,7 +3099,10 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
   // Collect ruby text instead of normal word processing
   if (self->collectingRubyText) {
-    self->rubyTextBuffer.append(s, len);
+    // Lingua: skip the annotation when the enclosing block is dropped for the active layout.
+    if (!self->wordIsFiltered()) {
+      self->rubyTextBuffer.append(s, len);
+    }
     return;
   }
 
@@ -3264,6 +3325,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   if (self->skipEndElementStateUntilDepth < self->depth) {
     self->depth -= 1;
     self->clearReferenceExclusionIfClosed();
+    if (self->translatedFromDepth >= self->depth) {
+      self->translatedFromDepth = INT_MAX;
+    }
     if (self->skipUntilDepth == self->depth) {
       self->skipUntilDepth = INT_MAX;
       self->skipEndElementStateUntilDepth = INT_MAX;
@@ -3274,7 +3338,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   // Ruby text: </rt> distributes ruby to base words, </ruby> resets ruby state
   if (strcmp(name, "rt") == 0) {
     self->collectingRubyText = false;
-    if (self->inRuby && self->currentTextBlock) {
+    // Lingua: in a layout that drops this block the base characters never became words, so skip
+    // the distribution instead of gluing the furigana onto an unrelated surviving word.
+    if (self->inRuby && self->currentTextBlock && !self->wordIsFiltered()) {
       const int currentWordCount = static_cast<int>(self->currentTextBlock->size());
       const int baseWordCount = currentWordCount - self->rubyStartWordIndex;
       std::string cleanRuby = trimAndNormalize(self->rubyTextBuffer);
@@ -3326,9 +3392,10 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   const bool willClearItalic = self->italicUntilDepth == self->depth - 1;
   const bool willClearUnderline = self->underlineUntilDepth == self->depth - 1;
   const bool willClearStrikethrough = self->strikethroughUntilDepth == self->depth - 1;
+  const bool willClearTranslated = self->translatedFromDepth == self->depth - 1;
 
-  const bool styleWillChange =
-      willPopStyleStack || willClearBold || willClearItalic || willClearUnderline || willClearStrikethrough;
+  const bool styleWillChange = willPopStyleStack || willClearBold || willClearItalic || willClearUnderline ||
+                               willClearStrikethrough || willClearTranslated;
   const bool headerOrBlockTag = isHeaderOrBlock(name);
   const bool tableStructuralTag = isTableStructuralTag(name);
 
@@ -3362,6 +3429,10 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
   self->depth -= 1;
   self->clearReferenceExclusionIfClosed();
+  // Lingua: leaving the element that introduced a translated lang=.
+  if (self->translatedFromDepth >= self->depth) {
+    self->translatedFromDepth = INT_MAX;
+  }
 
   // Pop ancestor entries that were pushed at or below the new depth
   while (!self->ancestorStack_.empty() && self->ancestorStack_.back().depth >= self->depth) {
@@ -3848,7 +3919,12 @@ bool ChapterHtmlSlimParser::finishParse() {
       abortParse();
       return false;
     }
-    makePages();
+    // Lingua: flush the trailing block through the builder that owns this layout, then drain any
+    // original still buffered (the chapter's last original) full-width.
+    makePagesForLayout();
+    if (bufferedOriginalBlock) {
+      flushBufferedOriginal();
+    }
     if (lowMemoryAbort) {
       abortParse();
       return false;
@@ -3899,13 +3975,19 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   return finishParse();
 }
 
-void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleOffset,
-                                          const uint32_t referenceOffset) {
+void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const LineFontRole role,
+                                          const uint32_t visibleOffset, const uint32_t referenceOffset) {
   if (lowMemoryAbort) {
     return;
   }
 
-  const int lineHeight = effectiveLineHeight() + line->getRubyShift(renderer.getFontAscenderSize(fontId));
+  // Lingua: pitch follows the line's OWN font, so a smaller translated line consumes less height.
+  // Both terms come from the SAME id the line was measured with.
+  const int roleFontId = fontIdForRole(role);
+  const int lineHeight =
+      (roleFontId == fontId ? effectiveLineHeight()
+                            : std::max(1, static_cast<int>(renderer.getLineHeight(roleFontId) * lineCompression + 0.5f))) +
+      line->getRubyShift(renderer.getFontAscenderSize(roleFontId));
 
   if (!currentPage) {
     if (!startNewPage("line layout")) {
@@ -3957,6 +4039,16 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
     lowMemoryAbort = true;
     return;
   }
+  // Lingua: stamp the originating paragraph index (Page Translation overlay line->paragraph map) and
+  // the role the line was measured with (PageLine::render -> PageFontSet::forRole).
+  pageLine->paragraphIdx = currentBlockParagraphIdx;
+  pageLine->fontRole = role;
+  if (currentBlockParagraphIdx >= 0) {
+    if (currentPage->firstParagraphIdx < 0) {
+      currentPage->firstParagraphIdx = currentBlockParagraphIdx;
+    }
+    currentPage->lastParagraphIdx = currentBlockParagraphIdx;
+  }
   currentPage->elements.push_back(std::move(pageLine));
   markCurrentPageFromCurrentTextBlock();
   currentPageNextY += lineHeight;
@@ -3986,7 +4078,13 @@ void ChapterHtmlSlimParser::makePages() {
   // intermediate text-run flush has already emitted the first lines and
   // consumed this spacing, so do not apply it again to the remainder.
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
-  const int lineHeight = effectiveLineHeight();
+  // Lingua: resolve the role ONCE for the whole block and use its font for measurement, for the
+  // per-line advance and for the paragraph gap below.
+  const LineFontRole role = currentLineRole();
+  const int roleFontId = fontIdForRole(role);
+  const int lineHeight = roleFontId == fontId
+                             ? effectiveLineHeight()
+                             : std::max(1, static_cast<int>(renderer.getLineHeight(roleFontId) * lineCompression + 0.5f));
   if (!currentTextBlock->isContinuation()) {
     if (blockStyle.marginTop > 0) {
       currentPageNextY += blockStyle.marginTop;
@@ -4002,10 +4100,9 @@ void ChapterHtmlSlimParser::makePages() {
       (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
 
   if (!currentTextBlock->layoutAndExtractLines(
-          renderer, fontId, effectiveWidth,
-          [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset, const uint32_t referenceOffset) {
-            addLineToPage(textBlock, offset, referenceOffset);
-          })) {
+          renderer, roleFontId, effectiveWidth,
+          [this, role](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset,
+                       const uint32_t referenceOffset) { addLineToPage(textBlock, role, offset, referenceOffset); })) {
     LOG_ERR("EHP", "Failed to lay out text block");
     lowMemoryAbort = true;
     return;
@@ -4017,12 +4114,7 @@ void ChapterHtmlSlimParser::makePages() {
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches
   // edge cases where a footnote's word index equals the exact block size.
-  if (!pendingFootnotes.empty() && currentPage) {
-    for (const auto& [idx, fn] : pendingFootnotes) {
-      currentPage->addFootnote(fn.number, fn.href, fn.linkId);
-    }
-    pendingFootnotes.clear();
-  }
+  flushPendingFootnotesToCurrentPage();
   attachPendingPublisherPageMarkers(currentPageNextY);
 
   // Apply bottom spacing after the paragraph (stored in pixels)
@@ -4047,4 +4139,64 @@ void ChapterHtmlSlimParser::makePages() {
     }
     currentPageNextY = 0;
   }
+}
+
+// ---- Lingua (CrossLingua) parser hooks -------------------------------------------------------
+
+void ChapterHtmlSlimParser::stampLinguaBlockOpen(const bool translated) {
+  // The counter advances once per content-bearing original block at ANY nesting depth: the FIRST
+  // open to claim a freshly-created text block takes the next index (currentBlockIndexAssigned
+  // latches so nested opens reusing the same empty block inherit it). A translated block never
+  // advances the counter; it pairs with the most recent original paragraph (paragraphCounter - 1).
+  currentBlockIsTranslated = translated;
+  if (translated) {
+    currentBlockParagraphIdx = static_cast<int16_t>(paragraphCounter - 1);
+  } else if (!currentBlockIndexAssigned) {
+    currentBlockParagraphIdx = paragraphCounter;
+    paragraphCounter++;
+    currentBlockIndexAssigned = true;
+  }
+}
+
+int ChapterHtmlSlimParser::linguaLineHeight(const int lineFontId) const {
+  return std::max(1, static_cast<int>(renderer.getLineHeight(lineFontId) * lineCompression + 0.5f));
+}
+
+void ChapterHtmlSlimParser::makePagesForLayout() {
+  if (linguaLayout == LinguaLayout::SideBySide) {
+    makePagesTableMode();
+  } else if (linguaLayout == LinguaLayout::Interlinear) {
+    makePagesInterlinearMode();
+  } else {
+    makePages();
+  }
+}
+
+void ChapterHtmlSlimParser::flushPendingFootnotesToCurrentPage() {
+  if (pendingFootnotes.empty()) return;
+  if (currentPage) {
+    for (const auto& [idx, fn] : pendingFootnotes) {
+      currentPage->addFootnote(fn.number, fn.href, fn.linkId);
+    }
+  }
+  // Cleared either way: an entry left behind would be drained against the NEXT block's word base.
+  pendingFootnotes.clear();
+}
+
+ChapterHtmlSlimParser::FootnoteLedger ChapterHtmlSlimParser::adoptBufferedFootnoteLedger() {
+  FootnoteLedger parked;
+  parked.wordBase = wordsExtractedInBlock;
+  // Swaps, never copies: an entry lives in exactly one ledger at every instant.
+  parked.pending.swap(pendingFootnotes);
+  pendingFootnotes.swap(bufferedOriginalFootnotes);
+  wordsExtractedInBlock = bufferedOriginalWordsExtracted;
+  return parked;
+}
+
+void ChapterHtmlSlimParser::releaseFootnoteLedger(FootnoteLedger& parked) {
+  flushPendingFootnotesToCurrentPage();
+  bufferedOriginalFootnotes.swap(pendingFootnotes);
+  bufferedOriginalWordsExtracted = 0;
+  pendingFootnotes.swap(parked.pending);
+  wordsExtractedInBlock = parked.wordBase;
 }

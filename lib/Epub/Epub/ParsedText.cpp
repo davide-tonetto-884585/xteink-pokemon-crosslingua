@@ -766,6 +766,14 @@ void ParsedText::ensureRubyCapacity() {
   // and no large contiguous reallocation to avoid). Kept for call-site stability.
 }
 
+int ParsedText::defaultFirstLineIndent(const GfxRenderer& renderer, const int fontId,
+                                       const bool extraParagraphSpacing) {
+  if (extraParagraphSpacing) {
+    return 0;  // the gap marks the boundary instead
+  }
+  return renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR) * 3;
+}
+
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& /*renderer*/,
                                        const int /*fontId*/) const {
   const bool naturalAlign =
@@ -783,22 +791,7 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   return 0;
 }
 
-// Consumes data to minimize memory usage
-bool ParsedText::layoutAndExtractLines(
-    const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
-    const std::function<void(std::shared_ptr<TextBlock>, uint32_t, uint32_t)>& processLine,
-    const bool includeLastLine) {
-  if (words.empty()) {
-    return true;
-  }
-
-  Arena layoutArena(psramHeapAvailable() ? ArenaBacking::PsramPreferred : ArenaBacking::Default);
-  if (!layoutArena.init(LAYOUT_ARENA_SLAB_BYTES)) {
-    LOG_ERR("PTX", "Failed to allocate layout scratch arena (%u bytes)",
-            static_cast<unsigned>(LAYOUT_ARENA_SLAB_BYTES));
-    return false;
-  }
-
+void ParsedText::prepareForLayout(const GfxRenderer& renderer, const int fontId) {
   if (!blockStyle.directionDefined && hasRtlWord) {
     const size_t wordsToScan = std::min(words.size(), RTL_PARAGRAPH_PROBE_WORDS);
     for (size_t i = 0; i < wordsToScan; ++i) {
@@ -836,6 +829,113 @@ bool ParsedText::layoutAndExtractLines(
       renderer.ensureSdCardFontReady(fontId, GUIDE_DOT_UTF8, 0x01);
     }
   }
+}
+
+void ParsedText::consumeWords(const size_t consumed) {
+  if (consumed == 0) return;
+  const size_t take = std::min(consumed, words.size());
+  words.erase(words.begin(), words.begin() + take);
+  wordStyles.erase(wordStyles.begin(), wordStyles.begin() + take);
+  wordContinues.erase(wordContinues.begin(), wordContinues.begin() + take);
+  wordNoSpaceBefore.erase(wordNoSpaceBefore.begin(), wordNoSpaceBefore.begin() + take);
+  wordFocusBoundary.erase(wordFocusBoundary.begin(), wordFocusBoundary.begin() + take);
+  wordGuideDotBefore.erase(wordGuideDotBefore.begin(), wordGuideDotBefore.begin() + take);
+  wordBackgroundBlack.erase(wordBackgroundBlack.begin(), wordBackgroundBlack.begin() + take);
+  eraseVisibleOffsetPrefix(take);
+  if (trackReferenceOffsets) {
+    const size_t refConsumed = std::min(take, wordReferenceOffsets.size());
+    wordReferenceOffsets.erase(wordReferenceOffsets.begin(), wordReferenceOffsets.begin() + refConsumed);
+  }
+  if (!rubyTexts.empty()) {
+    const size_t rtConsumed = std::min(take, rubyTexts.size());
+    rubyTexts.erase(rubyTexts.begin(), rubyTexts.begin() + rtConsumed);
+  }
+}
+
+void ParsedText::rebaseTrackedWordsAfterInsert(const size_t insertedIndex) {
+  // `> insertedIndex - 1` i.e. strictly after the word being split: a sentence that STARTS at the
+  // split word still starts at its prefix. Adding 1 to a suffix of an ascending list keeps it sorted.
+  for (auto& tracked : trackedWords) {
+    if (tracked >= insertedIndex) {
+      ++tracked;
+    }
+  }
+}
+
+bool ParsedText::extractNextLine(const GfxRenderer& renderer, const int fontId, const uint16_t width,
+                                 const std::function<void(std::shared_ptr<TextBlock>)>& processLine) {
+  if (words.empty()) return false;
+
+  Arena layoutArena(psramHeapAvailable() ? ArenaBacking::PsramPreferred : ArenaBacking::Default);
+  if (!layoutArena.init(LAYOUT_ARENA_SLAB_BYTES)) {
+    LOG_ERR("PTX", "Failed to allocate layout scratch arena (%u bytes)",
+            static_cast<unsigned>(LAYOUT_ARENA_SLAB_BYTES));
+    consumeWords(words.size());
+    return false;
+  }
+  prepareForLayout(renderer, fontId);
+
+  const int pageWidth = width;
+  ArenaVector<uint16_t> wordWidths(layoutArena);
+  ArenaVector<int16_t> naturalGaps(layoutArena);
+  ArenaVector<uint8_t> gapSlots(layoutArena);
+  ArenaVector<size_t> lineBreakIndices(layoutArena);
+  bool breaksOk = calculateWordWidths(wordWidths, renderer, fontId);
+  // The whole remaining block is broken and only the first line of that break is taken: a
+  // sentence's translation is a few dozen tokens, so the repeated work is bounded and small.
+  if (breaksOk) {
+    if (hyphenationEnabled) {
+      breaksOk = computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues,
+                                             wordNoSpaceBefore, lineBreakIndices) &&
+                 calculateGapMetrics(naturalGaps, gapSlots, renderer, fontId);
+    } else {
+      breaksOk = computeLineBreaks(layoutArena, renderer, fontId, pageWidth, wordWidths, wordContinues,
+                                   wordNoSpaceBefore, naturalGaps, gapSlots, lineBreakIndices);
+    }
+  }
+  if (!breaksOk || lineBreakIndices.empty()) {
+    consumeWords(words.size());
+    return false;
+  }
+
+  emittedLineOrdinal = 0;
+  const bool emitted = extractLine(
+      layoutArena, 0, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, naturalGaps, gapSlots,
+      lineBreakIndices,
+      [&processLine](std::shared_ptr<TextBlock> line, uint32_t, uint32_t) { processLine(std::move(line)); }, renderer,
+      fontId);
+  consumeWords(lineBreakIndices[0]);
+  return emitted;
+}
+
+// Consumes data to minimize memory usage
+bool ParsedText::layoutAndExtractLines(
+    const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
+    const std::function<void(std::shared_ptr<TextBlock>, uint32_t, uint32_t)>& processLine,
+    const bool includeLastLine, std::vector<TrackedWordPos>* const trackedOutParam) {
+  // Borrow the report vector for this call only (extractLine writes through it) and pre-fill it 1:1
+  // with the tracked list, so an index whose line is never reached stays NOT_PLACED.
+  trackedOut = trackedOutParam;
+  if (trackedOut) {
+    trackedOut->assign(trackedWords.size(), TrackedWordPos{});
+  }
+  struct TrackedOutReset {
+    std::vector<TrackedWordPos>*& ref;
+    ~TrackedOutReset() { ref = nullptr; }
+  } trackedOutReset{trackedOut};
+
+  if (words.empty()) {
+    return true;
+  }
+
+  Arena layoutArena(psramHeapAvailable() ? ArenaBacking::PsramPreferred : ArenaBacking::Default);
+  if (!layoutArena.init(LAYOUT_ARENA_SLAB_BYTES)) {
+    LOG_ERR("PTX", "Failed to allocate layout scratch arena (%u bytes)",
+            static_cast<unsigned>(LAYOUT_ARENA_SLAB_BYTES));
+    return false;
+  }
+
+  prepareForLayout(renderer, fontId);
 
   const int pageWidth = viewportWidth;
   ArenaVector<uint16_t> wordWidths(layoutArena);
@@ -865,6 +965,7 @@ bool ParsedText::layoutAndExtractLines(
   const size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
 
   for (size_t i = 0; i < lineCount; ++i) {
+    emittedLineOrdinal = i;
     if (!extractLine(layoutArena, i, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, naturalGaps, gapSlots,
                      lineBreakIndices, processLine, renderer, fontId)) {
       return false;
@@ -873,22 +974,7 @@ bool ParsedText::layoutAndExtractLines(
 
   // Remove consumed words so size() reflects only remaining words
   if (lineCount > 0) {
-    const size_t consumed = lineBreakIndices[lineCount - 1];
-    words.erase(words.begin(), words.begin() + consumed);
-    wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);
-    wordContinues.erase(wordContinues.begin(), wordContinues.begin() + consumed);
-    wordNoSpaceBefore.erase(wordNoSpaceBefore.begin(), wordNoSpaceBefore.begin() + consumed);
-    wordFocusBoundary.erase(wordFocusBoundary.begin(), wordFocusBoundary.begin() + consumed);
-    wordGuideDotBefore.erase(wordGuideDotBefore.begin(), wordGuideDotBefore.begin() + consumed);
-    wordBackgroundBlack.erase(wordBackgroundBlack.begin(), wordBackgroundBlack.begin() + consumed);
-    eraseVisibleOffsetPrefix(consumed);
-    if (trackReferenceOffsets) {
-      wordReferenceOffsets.erase(wordReferenceOffsets.begin(), wordReferenceOffsets.begin() + consumed);
-    }
-    if (!rubyTexts.empty()) {
-      const size_t rtConsumed = std::min(consumed, rubyTexts.size());
-      rubyTexts.erase(rubyTexts.begin(), rubyTexts.begin() + rtConsumed);
-    }
+    consumeWords(lineBreakIndices[lineCount - 1]);
   }
   if (lineCount > 0) {
     // A partial flush leaves the remaining words in this same logical
@@ -1315,8 +1401,10 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
     return splitTokenAtCodepointBoundary(wordIndex, availableWidth, renderer, fontId, wordWidths);
   }
 
-  // Collect candidate breakpoints (byte offsets and hyphen requirements).
-  auto breakInfos = Hyphenator::breakOffsets(word, allowFallbackBreaks);
+  // Collect candidate breakpoints (byte offsets and hyphen requirements). Translated words (Lingua,
+  // TRANSLATED style bit from a differing lang= block) hyphenate with the translated-language rules.
+  const bool isTranslated = (style & EpdFontFamily::TRANSLATED) != 0;
+  auto breakInfos = Hyphenator::breakOffsets(word, allowFallbackBreaks, isTranslated);
   if (breakInfos.empty()) {
     if (allowFallbackBreaks && allowCharacterBreaks_) {
       return splitTokenAtCodepointBoundary(wordIndex, availableWidth, renderer, fontId, wordWidths);
@@ -1384,6 +1472,7 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   // Insert the remainder word (with matching style and continuation flag) directly after the prefix.
   const FocusTokenMetadata remainderFocus = computeFocusMetadata(remainder, style, focusReadingEnabled);
   words.insert(words.begin() + wordIndex + 1, remainder);
+  rebaseTrackedWordsAfterInsert(wordIndex + 1);
   insertVisibleOffset(wordIndex + 1, remainderOffset);
   if (trackReferenceOffsets) {
     wordReferenceOffsets.insert(wordReferenceOffsets.begin() + wordIndex + 1, remainderReferenceOffset);
@@ -1503,6 +1592,7 @@ bool ParsedText::splitTokenAtCodepointBoundary(const size_t wordIndex, const int
   const FocusTokenMetadata remainderFocus = computeFocusMetadata(remainder, style, focusReadingEnabled);
   reserveTokenCapacity(1);
   words.insert(words.begin() + wordIndex + 1, remainder);
+  rebaseTrackedWordsAfterInsert(wordIndex + 1);
   insertVisibleOffset(wordIndex + 1, remainderOffset);
   if (trackReferenceOffsets) {
     wordReferenceOffsets.insert(wordReferenceOffsets.begin() + wordIndex + 1, remainderReferenceOffset);
@@ -1895,6 +1985,31 @@ bool ParsedText::extractLine(Arena& scratchArena, const size_t breakIndex, const
   if (!block->valid()) {
     LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
     return false;
+  }
+  // Lingua: report every tracked index that fell on THIS line, reading the x straight out of the
+  // positioning table built above. Empty in every layout but Interlinear.
+  if (trackedOut != nullptr && !trackedWords.empty()) {
+    auto it = std::lower_bound(trackedWords.begin(), trackedWords.end(), lastBreakAt,
+                               [](const uint16_t element, const size_t probe) { return element < probe; });
+    for (; it != trackedWords.end() && static_cast<size_t>(*it) < lineBreak; ++it) {
+      const size_t logical = static_cast<size_t>(*it) - lastBreakAt;
+      // The x table is in VISUAL order, so a reordered line needs the inverse permutation.
+      size_t slot = logical;
+      if (willReorder) {
+        slot = visualOrderScratch.size();
+        for (size_t v = 0; v < visualOrderScratch.size(); ++v) {
+          if (visualOrderScratch[v] == logical) {
+            slot = v;
+            break;
+          }
+        }
+      }
+      if (slot >= outXPos.size()) continue;
+      TrackedWordPos& out = (*trackedOut)[static_cast<size_t>(it - trackedWords.begin())];
+      out.line = static_cast<uint16_t>(emittedLineOrdinal);
+      out.x = outXPos[slot];
+      out.startsLine = logical == 0;
+    }
   }
   processLine(std::move(block), lineVisibleOffset, lineReferenceOffset);
   return true;

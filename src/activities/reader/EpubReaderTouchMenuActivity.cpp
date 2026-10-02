@@ -1263,6 +1263,9 @@ void EpubReaderTouchMenuActivity::activateRow(const RowId row) {
     case RowId::SelectChapter:
       closeAndReturn(false, EpubReaderMenuAction::SELECT_CHAPTER, false);
       return;
+    case RowId::Lingua:
+      closeAndReturn(false, EpubReaderMenuAction::LINGUA, false);
+      return;
     case RowId::GoToPercent:
       openPane(ReaderDrawerPane::Percent);
       return;
@@ -2093,6 +2096,8 @@ const char* EpubReaderTouchMenuActivity::rowLabel(const RowId row) const {
       return tr(STR_IMAGES);
     case RowId::SelectChapter:
       return tr(STR_SELECT_CHAPTER);
+    case RowId::Lingua:
+      return tr(STR_LINGUA);
     case RowId::GoToPercent:
       return tr(STR_GO_TO_PERCENT);
     case RowId::GoToStablePage:

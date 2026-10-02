@@ -79,7 +79,38 @@ class Section {
   uint32_t partialTotalBytes_ = 0;
   std::string activeBuildTmpSectionPath_;
 
-  bool writeSectionFileHeader(const ReaderRenderSpec& spec);
+  // Lingua: source the available pages were laid out from; see builtFromTranslatedSource().
+  bool translatedSource_ = false;
+  // Lingua: memoized answer to hasTranslation() (resolving it can cost a SAX scan of the chapter
+  // HTML, so it is computed at most once per Section). `Unknown` is the pre-scan state.
+  enum class TranslationPresence : uint8_t { Unknown, No, Yes };
+  mutable TranslationPresence translationPresence_ = TranslationPresence::Unknown;
+  // Lingua: memoized answer to isTextless(), filled by the same scans as translationPresence_.
+  enum class TextPresence : uint8_t { Unknown, HasText, Textless };
+  mutable TextPresence textPresence_ = TextPresence::Unknown;
+  // `<cache>/html/<spineIndex>.html` -- this spine's unzipped chapter HTML.
+  std::string getCachedHtmlPath() const;
+  // Inflate the chapter HTML into the per-book html cache if it isn't already there. On success
+  // `outParsePath` names the file to read and `outPromoted` says whether it is the persistent cache
+  // (true) or an un-promoted temp the caller must clean up (false, rename failed).
+  bool ensureChapterHtml(std::string& outParsePath, bool& outPromoted);
+  // True only for a translation the READER produced: `<spine>.translated.html` exists.
+  bool hasTranslatedSidecar() const;
+  // Lingua: decide which file a build parses (the translated sidecar when present) and resolve the
+  // chapter's translation presence for the cache key. Fills the effective spec the header is
+  // stamped with and the parser is configured from.
+  void resolveLinguaBuildSource(const ReaderRenderSpec& spec, const std::string& chapterHtmlPath,
+                                std::string& outParsePath, ReaderRenderSpec& outEffectiveSpec,
+                                bool& outTranslatedSource, bool& outEmbeddedTranslation);
+
+  // Lingua per-chapter fallback: a filtering/pairing layout on a chapter with no translated content
+  // is laid out (and cache-keyed) as LinguaLayout::Both instead. Shared by loadSectionFile() and the
+  // builds so the .bin is written and looked up under the SAME effective layout.
+  static LinguaLayout effectiveLayout(LinguaLayout requested, bool translatedSource);
+
+  // `translatedSource` (cache key) / `embeddedTranslation` (memo, not a key): see Section.cpp.
+  bool writeSectionFileHeader(const ReaderRenderSpec& spec, bool translatedSource = false,
+                              bool embeddedTranslation = false);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
   bool ensureBuildFileOpen();
   bool finalizeBuild();
@@ -104,6 +135,21 @@ class Section {
   ~Section();
   bool loadSectionFile(const ReaderRenderSpec& spec);
   bool clearCache() const;
+
+  // Lingua: path to the persisted bilingual HTML for this spine
+  // (`<cache>/sections/<spineIndex>.translated.html`). The translator subsystem writes it; builds
+  // prefer it over the unzipped chapter HTML when present, and it survives layout-cache invalidation.
+  std::string getTranslatedHtmlPath() const;
+  // Lingua: does this chapter have a translation to display (reader-produced sidecar, or translations
+  // embedded in the chapter's own XHTML)? Memoized; answers TRUE while not yet knowable for free.
+  bool hasTranslation() const;
+  // Lingua: true when this spine holds no body text at all (cover, illustration plate).
+  bool isTextless() const;
+  bool isTranslationPresenceKnown() const { return translationPresence_ != TranslationPresence::Unknown; }
+  // Lingua: force hasTranslation() to a definitive answer, inflating the chapter HTML if needed.
+  void resolveTranslationPresence();
+  // Lingua: whether the HTML the available pages were laid out from contained translations.
+  bool builtFromTranslatedSource() const { return translatedSource_; }
   bool createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr,
                          bool* imagesWereSuppressed = nullptr, bool* layoutAbortedForLowMemory = nullptr,
                          SectionBuildOptions buildOptions = {});

@@ -1,0 +1,349 @@
+#include "modules/lingua/reader/LinguaReaderIntegration.h"
+
+#include "CrossPointSettings.h"
+#include "I18n.h"
+#include "MappedInputManager.h"
+#include "activities/Activity.h"
+#include "activities/reader/ReaderUtils.h"
+#include "components/UITheme.h"
+#include "components/WrappedPopup.h"
+#include "fontIds.h"
+
+LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleInput(MappedInputManager& input,
+                                                                          const bool hasSection) {
+  InputAction action = handleTransientUi();
+  if (action != InputAction::None) return action;
+
+  action = handleFallbackDialog(input);
+  if (action != InputAction::None) return action;
+
+  action = handleTooltipInput(input, hasSection);
+  if (action != InputAction::None) return action;
+
+  action = handlePageTranslationInput(input, hasSection);
+  if (action != InputAction::None) return action;
+
+  return handleInterlinearInput(input, hasSection);
+}
+
+bool LinguaReaderIntegration::touchSelectionModeEnabled() {
+  // Only the display modes that lay the page out as the ORIGINAL text alone: the tooltip's sentence
+  // matching pairs the page's words with the translated HTML, which needs an original-only page. In
+  // the other modes the translation is already on the page.
+  switch (static_cast<CrossPointSettings::LINGUA_MODE>(SETTINGS.translationDisplayMode)) {
+    case CrossPointSettings::LINGUA_ORIGINAL_ONLY:
+    case CrossPointSettings::LINGUA_TOOLTIP:
+    case CrossPointSettings::LINGUA_PAGE_TRANSLATION:
+      return true;
+    default:
+      return false;
+  }
+}
+
+LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleTouchSelection(MappedInputManager& input,
+                                                                                   const bool hasSection) {
+  if (!hasSection || !SETTINGS.touchReaderControls || !input.hasTouch() || translatedHtmlPath_.empty() ||
+      modes_.pageTranslation().active() || !touchSelectionModeEnabled()) {
+    touchSelectState_ = TouchSelectState::Idle;
+    return InputAction::None;
+  }
+
+  int x = 0;
+  int y = 0;
+  if (input.wasScreenTouchDown(x, y)) {
+    touchSelectState_ = TouchSelectState::Tracking;
+    touchStartX_ = touchLastX_ = x;
+    touchStartY_ = touchLastY_ = y;
+    touchStartMs_ = millis();
+  }
+  if (touchSelectState_ == TouchSelectState::Idle) return InputAction::None;
+
+  if (input.isScreenTouchHeld(x, y)) {
+    touchLastX_ = x;
+    touchLastY_ = y;
+    const int dx = x - touchStartX_;
+    const int dy = y - touchStartY_;
+    const bool moved = dx * dx + dy * dy > TOUCH_SELECT_SLOP_PX * TOUCH_SELECT_SLOP_PX;
+    if (touchSelectState_ == TouchSelectState::Tracking && moved) {
+      // Moving before the arm delay is an ordinary swipe; after it, a sentence selection.
+      touchSelectState_ = (millis() - touchStartMs_ >= TOUCH_SELECT_ARM_MS) ? TouchSelectState::Dragging
+                                                                             : TouchSelectState::Idle;
+    }
+    return touchSelectState_ == TouchSelectState::Dragging ? InputAction::Consumed : InputAction::None;
+  }
+
+  // Contact ended (or was taken by another handler, e.g. the dictionary).
+  const TouchSelectState endedState = touchSelectState_;
+  touchSelectState_ = TouchSelectState::Idle;
+  if (!input.wasScreenTouchReleased()) return InputAction::None;
+  MappedInputManager::SwipeDir dir = MappedInputManager::SwipeDir::None;
+  int sx = 0, sy = 0, ex = 0, ey = 0;
+  if (input.wasSwipeWithPoints(dir, sx, sy, ex, ey)) {
+    touchLastX_ = ex;
+    touchLastY_ = ey;
+  }
+  // Sparse touch samples can deliver the whole move on the release frame: an armed hold that ends
+  // away from where it started is a selection too.
+  const int dx = touchLastX_ - touchStartX_;
+  const int dy = touchLastY_ - touchStartY_;
+  const bool armedMove = endedState == TouchSelectState::Tracking &&
+                         millis() - touchStartMs_ >= TOUCH_SELECT_ARM_MS &&
+                         dx * dx + dy * dy > TOUCH_SELECT_SLOP_PX * TOUCH_SELECT_SLOP_PX;
+  if (endedState != TouchSelectState::Dragging && !armedMove) {
+    // A plain tap while a translation tooltip is showing closes it instead of turning the page.
+    int tx = 0;
+    int ty = 0;
+    if (modes_.tooltip().active() && input.wasScreenTapped(tx, ty)) {
+      modes_.tooltip().dismiss();
+      clearOverlayPrewarm();
+      return InputAction::Render;
+    }
+    return InputAction::None;
+  }
+  modes_.tooltip().requestPointSelection(touchStartX_, touchStartY_, touchLastX_, touchLastY_);
+  clearOverlayPrewarm();
+  return InputAction::Render;
+}
+
+LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleTransientUi() {
+  if (showNoTranslationsToast_ && millis() - noTranslationsToastTime_ >= 2000UL) {
+    showNoTranslationsToast_ = false;
+    return InputAction::Render;
+  }
+  return InputAction::None;
+}
+
+LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleFallbackDialog(MappedInputManager& input) {
+  if (!fallbackDialogActive_) return InputAction::None;
+  // Touch-only devices (X4 Pro) have no Confirm/Back buttons: a tap anywhere dismisses too.
+  int tapX = 0;
+  int tapY = 0;
+  if (fallbackDialogDrawn_ &&
+      (input.wasReleased(MappedInputManager::Button::Confirm) || input.wasReleased(MappedInputManager::Button::Back) ||
+       input.wasScreenTapped(tapX, tapY))) {
+    fallbackDialogActive_ = false;
+    fallbackDialogDrawn_ = false;
+    return InputAction::Render;
+  }
+  return InputAction::Consumed;
+}
+
+LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleTooltipInput(MappedInputManager& input,
+                                                                                 const bool hasSection) {
+  if (!hasSection || SETTINGS.translationDisplayMode != CrossPointSettings::LINGUA_TOOLTIP) {
+    return InputAction::None;
+  }
+
+  if (modes_.tooltip().handleInput(input)) {
+    if (modes_.tooltip().hasPendingPageTurn()) {
+      const bool forward = modes_.tooltip().takePendingPageTurn();
+      return forward ? InputAction::PageForward : InputAction::PageBack;
+    }
+    return InputAction::Render;
+  }
+
+  const bool front = SETTINGS.tooltipButtons == CrossPointSettings::OVERLAY_BUTTONS_FRONT;
+  const bool side = SETTINGS.tooltipButtons == CrossPointSettings::OVERLAY_BUTTONS_SIDE;
+  const bool held = (front && (input.isPressed(MappedInputManager::Button::Left) ||
+                               input.isPressed(MappedInputManager::Button::Right))) ||
+                    (side && (input.isPressed(MappedInputManager::Button::PageBack) ||
+                              input.isPressed(MappedInputManager::Button::PageForward)));
+  return held ? InputAction::Consumed : InputAction::None;
+}
+
+LinguaReaderIntegration::InputAction LinguaReaderIntegration::handlePageTranslationInput(MappedInputManager& input,
+                                                                                         const bool hasSection) {
+  if (modes_.pageTranslation().handleInput(input)) {
+    return InputAction::Render;
+  }
+
+  if (modes_.pageTranslation().active()) return InputAction::Consumed;
+
+  if (hasSection && SETTINGS.translationDisplayMode == CrossPointSettings::LINGUA_PAGE_TRANSLATION) {
+    const bool forward = input.wasReleased(MappedInputManager::Button::PageForward);
+    const bool back = input.wasReleased(MappedInputManager::Button::PageBack);
+    if (forward || back) {
+      if (input.getHeldTime() >= ReaderUtils::SKIP_HOLD_MS) {
+        modes_.pageTranslation().open();
+        clearOverlayPrewarm();
+        return InputAction::Render;
+      }
+      return forward ? InputAction::PageForward : InputAction::PageBack;
+    }
+    if (input.isPressed(MappedInputManager::Button::PageForward) ||
+        input.isPressed(MappedInputManager::Button::PageBack)) {
+      return InputAction::Consumed;
+    }
+  }
+  return InputAction::None;
+}
+
+LinguaReaderIntegration::InputAction LinguaReaderIntegration::handleInterlinearInput(MappedInputManager& input,
+                                                                                     const bool hasSection) {
+  if (hasSection && SETTINGS.translationDisplayMode == CrossPointSettings::LINGUA_INTERLINEAR &&
+      SETTINGS.interlinearToggleByLongPress) {
+    const bool front = SETTINGS.interlinearToggleButtons == CrossPointSettings::OVERLAY_BUTTONS_FRONT;
+    const auto backButton = front ? MappedInputManager::Button::Left : MappedInputManager::Button::PageBack;
+    const auto forwardButton = front ? MappedInputManager::Button::Right : MappedInputManager::Button::PageForward;
+    const bool back = input.wasReleased(backButton);
+    const bool forward = input.wasReleased(forwardButton);
+    if (back || forward) {
+      if (input.getHeldTime() >= ReaderUtils::SKIP_HOLD_MS) {
+        modes_.interlinear().toggleTranslation();
+        return InputAction::Render;
+      }
+      return forward ? InputAction::PageForward : InputAction::PageBack;
+    }
+    if (input.isPressed(backButton) || input.isPressed(forwardButton)) return InputAction::Consumed;
+  }
+
+  return InputAction::None;
+}
+
+PageFontSet LinguaReaderIntegration::pageFontSet() const {
+  return resolvePageFontSet(modes_.interlinear().translationVisible());
+}
+
+void LinguaReaderIntegration::configureRenderer(GfxRenderer& renderer) {
+  const auto mode = static_cast<CrossPointSettings::LINGUA_MODE>(SETTINGS.translationDisplayMode);
+  renderer.setTranslationGrayLevel(InterleavedMode::translatedWordInk(mode, SETTINGS.translationShade));
+}
+
+PageFontSet LinguaReaderIntegration::resolvePageFontSet(const bool annotationVisible) {
+  const auto mode = static_cast<CrossPointSettings::LINGUA_MODE>(SETTINGS.translationDisplayMode);
+  PageFontSet fonts(SETTINGS.getReaderFontId(), SETTINGS.getInterleavedTranslationFontId(),
+                    SETTINGS.getInterlinearAnnotationFontId());
+  fonts.annotationInk = InterlinearMode::annotationInk(mode, SETTINGS.interlinearAnnotationShade);
+  fonts.translationInk = SideBySideMode::translationInk(mode, SETTINGS.sideBySideTranslationShade);
+  fonts.annotationVisible = annotationVisible;
+  return fonts;
+}
+
+void LinguaReaderIntegration::renderOverlay(GfxRenderer& renderer, const Page& page, const int xOffset,
+                                            const int yOffset, const int viewportWidth, const int viewportHeight) {
+  const int bodyFont = SETTINGS.getReaderFontId();
+  if (modes_.pageTranslation().active()) {
+    modes_.pageTranslation().render(renderer, page, bodyFont, getPageTranslationFontId(), xOffset, yOffset,
+                                    viewportWidth, viewportHeight);
+    if (!modes_.pageTranslation().active()) {
+      showNoTranslationsToast_ = true;
+      noTranslationsToastTime_ = millis();
+    }
+  }
+  if (modes_.tooltip().active()) {
+    modes_.tooltip().render(renderer, page, bodyFont, getTooltipFontId(), xOffset, yOffset, viewportWidth,
+                            viewportHeight);
+  }
+}
+
+bool LinguaReaderIntegration::prepareOverlayFonts(GfxRenderer& renderer, const Page& page, const PageFontSet& fonts,
+                                                  const int spineIndex, const int pageIndex, const int xOffset,
+                                                  const int yOffset) {
+  if (!modes_.pageTranslation().active() && !modes_.tooltip().active()) {
+    clearOverlayPrewarm();
+    return false;
+  }
+
+  auto* cache = renderer.getFontCacheManager();
+  const int overlayFont = modes_.pageTranslation().active() ? getPageTranslationFontId() : getTooltipFontId();
+  const bool stale = !overlayPrewarm_ || overlayPrewarmSpine_ != spineIndex || overlayPrewarmPage_ != pageIndex ||
+                     overlayPrewarmFontId_ != fonts.body || overlayPrewarmOverlayFontId_ != overlayFont ||
+                     overlayPrewarmGeneration_ != cache->cacheGeneration();
+  if (!stale) return true;
+
+  std::string overlayText;
+  if (modes_.pageTranslation().active()) {
+    modes_.pageTranslation().collectGlyphText(page, overlayText);
+  } else {
+    modes_.tooltip().collectGlyphText(page, overlayText);
+  }
+
+  overlayPrewarm_.emplace(*cache, FontCacheManager::PreparationPolicy::Normal);
+  page.render(renderer, fonts, xOffset, yOffset);
+  if (overlayFont == fonts.body && !overlayText.empty()) {
+    cache->recordText(overlayText.c_str(), fonts.body, EpdFontFamily::REGULAR);
+  }
+  overlayPrewarm_->endScanAndPrewarm();
+  if (overlayFont != fonts.body && !overlayText.empty()) {
+    cache->prewarmCache(overlayFont, overlayText.c_str(), 0x01);
+  }
+
+  overlayPrewarmSpine_ = spineIndex;
+  overlayPrewarmPage_ = pageIndex;
+  overlayPrewarmFontId_ = fonts.body;
+  overlayPrewarmOverlayFontId_ = overlayFont;
+  overlayPrewarmGeneration_ = cache->cacheGeneration();
+  return true;
+}
+
+void LinguaReaderIntegration::drawTransientUi(GfxRenderer& renderer) const {
+  if (showNoTranslationsToast_) {
+    drawWrappedPopup(renderer, tr(STR_NO_TRANSLATIONS_FOR_PAGE));
+  }
+}
+
+bool LinguaReaderIntegration::prepareSection(Section& section) {
+  if (SETTINGS.translationDisplayMode == CrossPointSettings::LINGUA_NORMAL) return false;
+  if (!section.isTranslationPresenceKnown()) section.resolveTranslationPresence();
+  if (section.hasTranslation() || section.isTextless()) return false;
+
+  SETTINGS.translationDisplayMode = CrossPointSettings::LINGUA_NORMAL;
+  SETTINGS.saveToFile();
+  fallbackDialogActive_ = true;
+  fallbackDialogDrawn_ = false;
+  return true;
+}
+
+void LinguaReaderIntegration::drawFallbackDialog(GfxRenderer& renderer, const MappedInputManager& input) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                 tr(STR_LINGUA));
+
+  const int maxTextWidth = std::max(1, screen.width - 2 * (metrics.popupMarginX + metrics.popupFrameThickness));
+  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const auto lines = renderer.wrappedText(UI_12_FONT_ID, tr(STR_NO_TRANSLATION_SWITCH_NORMAL), maxTextWidth, 4);
+  int textY = screen.y + (screen.height - static_cast<int>(lines.size()) * lineHeight) / 2;
+  for (const auto& line : lines) {
+    renderer.drawCenteredText(UI_12_FONT_ID, textY, line.c_str(), true);
+    textY += lineHeight;
+  }
+
+  const auto labels = input.mapLabels(tr(STR_BACK), tr(STR_CONFIRM), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
+  fallbackDialogDrawn_ = true;
+}
+
+void LinguaReaderIntegration::onPageChanged() {
+  modes_.pageTranslation().onPageChanged();
+  modes_.tooltip().onPageChanged();
+  clearOverlayPrewarm();
+}
+
+void LinguaReaderIntegration::onSectionChanged(const std::string& translatedHtmlPath) {
+  if (translatedHtmlPath_ == translatedHtmlPath) return;
+  translatedHtmlPath_ = translatedHtmlPath;
+  modes_.pageTranslation().setTranslatedHtmlPath(translatedHtmlPath);
+  modes_.pageTranslation().onSectionChanged();
+  modes_.tooltip().setTranslatedHtmlPath(translatedHtmlPath);
+  modes_.tooltip().onPageChanged();
+  clearOverlayPrewarm();
+}
+
+void LinguaReaderIntegration::onReaderExit() {
+  clearOverlayPrewarm();
+  modes_.pageTranslation().onSectionChanged();
+  modes_.tooltip().onPageChanged();
+  translatedHtmlPath_.clear();
+}
+
+void LinguaReaderIntegration::clearOverlayPrewarm() {
+  overlayPrewarm_.reset();
+  overlayPrewarmSpine_ = -1;
+  overlayPrewarmPage_ = -1;
+  overlayPrewarmFontId_ = -1;
+  overlayPrewarmOverlayFontId_ = -1;
+  overlayPrewarmGeneration_ = 0;
+}

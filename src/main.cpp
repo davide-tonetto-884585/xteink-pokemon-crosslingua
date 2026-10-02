@@ -103,6 +103,7 @@ inline esp_sleep_wakeup_cause_t esp_sleep_get_wakeup_cause() { return ESP_SLEEP_
 #include "components/UITheme.h"
 #include "components/icons/tablerFilledIcons.h"
 #include "fontIds.h"
+#include "modules/lingua/reader/LinguaReaderIntegration.h"
 #include "network/UsbSerialFileTransfer.h"
 #ifdef SIMULATOR
 #include <SimulatorLifecycle.h>
@@ -1584,6 +1585,8 @@ void loop() {
   }
 
   renderer.setFadingFix(SETTINGS.fadingFix);
+  // Lingua: gray level for words carrying the TRANSLATED style bit (Interleaved mode).
+  LinguaReaderIntegration::configureRenderer(renderer);
 
   if (Serial && millis() - lastMemPrint >= 10000) {
     logMemoryStats("Periodic");

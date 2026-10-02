@@ -5,7 +5,9 @@ class EpdFontFamily {
  public:
   // Bitmask of text style flags carried per-word through layout and serialized in page cache.
   // Bits 0-1 select the font variant; higher bits are render-time overlays.
-  enum Style : uint8_t {
+  // 16 bits wide: CrossInk's SMALL_CAPS and CrossLingua's TRANSLATED both needed a bit after the
+  // original 8-bit style byte was full, so TextBlock persists word styles as uint16_t.
+  enum Style : uint16_t {
     REGULAR = 0,
     BOLD = 1,
     ITALIC = 2,
@@ -14,8 +16,9 @@ class EpdFontFamily {
     STRIKETHROUGH = 8,
     SUP = 16,
     SUB = 32,
-    SMALL_CAPS = 64,
+    TRANSLATED = 64,  // Lingua: word came from a translated block (differing lang= attribute)
     RUBY_CONTINUE = 128,
+    SMALL_CAPS = 256,
   };
   struct GlyphData {
     const EpdFontData* fontData;

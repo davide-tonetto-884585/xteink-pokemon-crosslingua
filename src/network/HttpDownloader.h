@@ -2,6 +2,7 @@
 #include <HalStorage.h>
 #include <Stream.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -52,11 +53,33 @@ class HttpDownloader {
     std::string_view authorizationOrigin;
   };
 
+  // Lingua: TLS heap floors the translation activities apply before starting a chapter's requests.
+  static constexpr uint32_t MIN_FREE_HEAP_FOR_TLS = 45000;
+  static constexpr uint32_t MIN_MAX_ALLOC_FOR_TLS = 20000;
+  static constexpr uint32_t MIN_FREE_HEAP_FOR_REUSE = 12000;
+
   /**
    * Fetch text content from a URL with optional credentials.
+   * @param userAgent Overrides the default User-Agent for this call only (nullptr keeps it). Needed
+   *        for UA-sensitive endpoints (the anonymous Azure/Edge token endpoint expects a browser UA).
    */
   static bool fetchUrl(const std::string& url, std::string& outContent, const std::string& username = "",
-                       const std::string& password = "");
+                       const std::string& password = "", const char* userAgent = nullptr);
+
+  /**
+   * Lingua: POST with configurable content type and one extra header; buffers the response body.
+   * Returns true only on HTTP 200. Sets lastHttpCode on every exit path.
+   */
+  static bool post(const std::string& url, const std::string& body, const char* contentType,
+                   const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent);
+
+  /** Lingua: POST JSON with an optional Authorization header value (e.g. "Bearer xxx"). */
+  static bool postJson(const std::string& url, const std::string& jsonBody, const std::string& authHeader,
+                       std::string& outContent);
+
+  // Last HTTP response code from the most recent post/postJson call. Negative values indicate
+  // connection-level failures; positive values are HTTP status codes.
+  static int lastHttpCode;
 
   static bool fetchUrl(const std::string& url, Stream& stream, const std::string& username = "",
                        const std::string& password = "");
@@ -81,4 +104,33 @@ class HttpDownloader {
                                       ProgressCallback progress = nullptr, bool* cancelFlag = nullptr,
                                       const std::string& username = "", const std::string& password = "",
                                       DownloadOptions options = DownloadOptions());
+};
+
+/**
+ * Lingua: a burst of requests to the same origin (one chapter's translation batches). On this
+ * firmware every request delegates to the matching HttpDownloader static (one connection per
+ * request), so behavior is identical to not using a session; the class keeps the translator's
+ * interface and its heap backpressure.
+ */
+class ReusableHttpSession {
+ public:
+  ReusableHttpSession() = default;
+  ~ReusableHttpSession() = default;
+  ReusableHttpSession(const ReusableHttpSession&) = delete;
+  ReusableHttpSession& operator=(const ReusableHttpSession&) = delete;
+
+  bool fetchUrl(const std::string& url, std::string& outContent) { return HttpDownloader::fetchUrl(url, outContent); }
+  bool post(const std::string& url, const std::string& body, const char* contentType, const char* extraHeaderName,
+            const char* extraHeaderValue, std::string& outContent) {
+    return HttpDownloader::post(url, body, contentType, extraHeaderName, extraHeaderValue, outContent);
+  }
+  bool postJson(const std::string& url, const std::string& jsonBody, const std::string& authHeader,
+                std::string& outContent) {
+    return HttpDownloader::postJson(url, jsonBody, authHeader, outContent);
+  }
+
+  // Heap backpressure before a request's TLS connect: waits (feeding the watchdog) until the heap
+  // can support a handshake, or until timeoutMs elapses / *cancelFlag is set. Returns false only on
+  // a genuine timeout or cancel.
+  bool waitForHeapReady(uint32_t timeoutMs, volatile const bool* cancelFlag);
 };

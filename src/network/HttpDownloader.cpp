@@ -457,8 +457,108 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
       password);
 }
 
+int HttpDownloader::lastHttpCode = 0;
+
+namespace {
+// Lingua: buffered request (translation engines answer in the KB range). Uses perform() with an
+// ON_DATA handler, which follows redirects and works on both the device and the simulator.
+esp_err_t collectResponseBody(esp_http_client_event_t* evt) {
+  if (evt->event_id == HTTP_EVENT_ON_DATA && evt->user_data != nullptr && evt->data != nullptr &&
+      evt->data_len > 0) {
+    static_cast<std::string*>(evt->user_data)->append(static_cast<const char*>(evt->data), evt->data_len);
+  }
+  return ESP_OK;
+}
+
+bool runBufferedRequest(const bool isPost, const std::string& url, const std::string& body, const char* contentType,
+                        const char* extraHeaderName, const char* extraHeaderValue, const char* userAgent,
+                        std::string& outContent, int& outStatus) {
+  WifiPowerSaveGuard wifiPowerSaveGuard;
+  (void)wifiPowerSaveGuard;
+  outContent.clear();
+  outStatus = -1;
+
+  esp_http_client_config_t config = {};
+  config.url = url.c_str();
+  config.method = isPost ? HTTP_METHOD_POST : HTTP_METHOD_GET;
+  config.buffer_size = HTTP_RX_BUF;
+  config.buffer_size_tx = HTTP_TX_BUF;
+  config.timeout_ms = HTTP_TIMEOUT_MS;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.keep_alive_enable = false;
+  config.event_handler = collectResponseBody;
+  config.user_data = &outContent;
+
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  if (!client) {
+    LOG_ERR("HTTP", "Buffered request client init failed");
+    return false;
+  }
+  esp_http_client_set_header(client, "User-Agent", userAgent ? userAgent : "CrossInk-ESP32-" CROSSINK_VERSION);
+  if (contentType && *contentType) {
+    esp_http_client_set_header(client, "Content-Type", contentType);
+  }
+  if (extraHeaderName && extraHeaderValue) {
+    esp_http_client_set_header(client, extraHeaderName, extraHeaderValue);
+  }
+  if (isPost && !body.empty()) {
+    esp_http_client_set_post_field(client, body.c_str(), static_cast<int>(body.size()));
+  }
+
+  const esp_err_t err = esp_http_client_perform(client);
+  if (err != ESP_OK) {
+    LOG_ERR("HTTP", "Buffered request failed: %s", esp_err_to_name(err));
+    esp_http_client_cleanup(client);
+    return false;
+  }
+  outStatus = esp_http_client_get_status_code(client);
+  esp_http_client_cleanup(client);
+  if (outStatus != 200) {
+    LOG_ERR("HTTP", "Buffered request status %d (%u byte body)", outStatus, static_cast<unsigned>(outContent.size()));
+    return false;
+  }
+  return true;
+}
+}  // namespace
+
+bool HttpDownloader::post(const std::string& url, const std::string& body, const char* contentType,
+                          const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent) {
+  LOG_DBG("HTTP", "POST (body=%u bytes)", static_cast<unsigned>(body.size()));
+  int status = -1;
+  const bool ok =
+      runBufferedRequest(true, url, body, contentType, extraHeaderName, extraHeaderValue, nullptr, outContent, status);
+  lastHttpCode = status;
+  return ok;
+}
+
+bool HttpDownloader::postJson(const std::string& url, const std::string& jsonBody, const std::string& authHeader,
+                              std::string& outContent) {
+  const char* authName = authHeader.empty() ? nullptr : "Authorization";
+  const char* authValue = authHeader.empty() ? nullptr : authHeader.c_str();
+  return post(url, jsonBody, "application/json", authName, authValue, outContent);
+}
+
+bool ReusableHttpSession::waitForHeapReady(const uint32_t timeoutMs, volatile const bool* cancelFlag) {
+  const uint32_t start = millis();
+  while (ESP.getFreeHeap() < HttpDownloader::MIN_FREE_HEAP_FOR_TLS ||
+         ESP.getMaxAllocHeap() < HttpDownloader::MIN_MAX_ALLOC_FOR_TLS) {
+    if (cancelFlag && *cancelFlag) return false;
+    if (millis() - start >= timeoutMs) {
+      LOG_ERR("HTTP", "Heap not ready for TLS after %lu ms (free=%u maxAlloc=%u)", static_cast<unsigned long>(timeoutMs),
+              ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      return false;
+    }
+    delay(50);
+  }
+  return true;
+}
+
 bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
-                              const std::string& password) {
+                              const std::string& password, const char* userAgent) {
+  if (userAgent != nullptr && username.empty() && password.empty()) {
+    int status = -1;
+    return runBufferedRequest(false, url, std::string(), nullptr, nullptr, nullptr, userAgent, outContent, status);
+  }
   outContent.clear();
   return fetchUrl(
       url,

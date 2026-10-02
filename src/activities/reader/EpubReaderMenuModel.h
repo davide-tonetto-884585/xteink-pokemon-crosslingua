@@ -33,6 +33,7 @@ enum class EpubReaderMenuAction : uint8_t {
   LOOKUP_HISTORY,
   SET_BOOK_DICTIONARY,
   STATUS_BAR_SETTINGS,
+  LINGUA,  // CrossLingua translation submenu
 };
 
 enum class ReaderDrawerTab : uint8_t { Font = 0, Layout = 1, More = 2, Location = 3, Settings = 4, Count };
@@ -99,6 +100,7 @@ enum class ReaderDrawerCatalogItem : uint8_t {
   FontSize,
   DictionaryFontFamily,
   DictionaryFontSize,
+  Lingua,  // CrossLingua translation submenu
 };
 
 struct ReaderDrawerAvailability {
@@ -150,6 +152,8 @@ constexpr ReaderDrawerCatalog makeReaderDrawerCatalog(const ReaderDrawerAvailabi
   if (available.hasStablePageNumbers) more.add(ReaderDrawerCatalogItem::GoToStablePage);
   more.add(ReaderDrawerCatalogItem::AutoPageTurn);
   if (available.hasFootnotes) more.add(ReaderDrawerCatalogItem::Footnotes);
+  // Appended last so the existing rows keep their positions.
+  more.add(ReaderDrawerCatalogItem::Lingua);
 
   auto& location = catalog[static_cast<size_t>(ReaderDrawerTab::Location)];
   location.add(ReaderDrawerCatalogItem::BookmarkToggle);

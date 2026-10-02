@@ -21,6 +21,9 @@
 #include "ReaderProgressSaveDebouncer.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
+#include "modules/lingua/reader/LinguaReaderIntegration.h"
+
+enum class LinguaResult : uint8_t;
 #if CROSSINK_APP_CAP_TOUCH
 #include "activities/reader/ReaderPinchGesture.h"
 #include "activities/reader/TouchReaderPreviewModel.h"
@@ -240,6 +243,10 @@ class EpubReaderActivity final : public Activity {
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
   bool pendingReadFolderMove = false;
+  // CrossLingua: overlay modes, fallback dialog and per-page font set for translated books.
+  LinguaReaderIntegration lingua;
+  void launchTranslation(LinguaResult kind);
+  PageFontSet linguaPageFonts(int bodyFontId) const;
   // The end screen owns these UI resources only while it is visible.
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
 

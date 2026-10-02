@@ -10,6 +10,7 @@
 
 #include "FootnoteEntry.h"
 #include "PageCountEstimator.h"
+#include "PageFontSet.h"
 #include "blocks/ImageBlock.h"
 #include "blocks/TextBlock.h"
 
@@ -27,7 +28,10 @@ class PageElement {
   int16_t yPos;
   explicit PageElement(const int16_t xPos, const int16_t yPos) : xPos(xPos), yPos(yPos) {}
   virtual ~PageElement() = default;
-  virtual void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) = 0;
+  // The whole page's font set, not a single id: a page can mix roles (body text, smaller
+  // translated text, annotations). Elements that draw no text ignore it. A plain int font id
+  // converts implicitly to a single-font set.
+  virtual void render(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) = 0;
   virtual bool serialize(FsFile& file) = 0;
   virtual PageElementTag getTag() const = 0;  // Add type identification
 };
@@ -37,10 +41,18 @@ class PageLine final : public PageElement {
   std::shared_ptr<TextBlock> block;
 
  public:
+  // Lingua: index of the original paragraph this line belongs to (for the Page Translation
+  // display mode's line->paragraph mapping). -1 = unset.
+  int16_t paragraphIdx = -1;
+  // Which font this line draws in, resolved against the page's PageFontSet at render time. Set at
+  // layout time (the measurement used the same role), so a cached page always redraws in the font
+  // it was measured with.
+  LineFontRole fontRole = LineFontRole::Body;
+
   PageLine(std::shared_ptr<TextBlock> block, const int16_t xPos, const int16_t yPos)
       : PageElement(xPos, yPos), block(std::move(block)) {}
   const std::shared_ptr<TextBlock>& getBlock() const { return block; }
-  void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) override;
+  void render(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) override;
   bool serialize(FsFile& file) override;
   PageElementTag getTag() const override { return TAG_PageLine; }
   static std::unique_ptr<PageLine> deserialize(FsFile& file);
@@ -53,7 +65,7 @@ class PageImage final : public PageElement {
  public:
   PageImage(std::unique_ptr<ImageBlock> block, const int16_t xPos, const int16_t yPos)
       : PageElement(xPos, yPos), imageBlock(std::move(block)) {}
-  void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) override;
+  void render(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) override;
   void renderPlaceholder(GfxRenderer& renderer, int xOffset, int yOffset, bool foregroundBlack) const;
   bool serialize(FsFile& file) override;
   PageElementTag getTag() const override { return TAG_PageImage; }
@@ -69,7 +81,7 @@ class PageHorizontalRule final : public PageElement {
   PageHorizontalRule(uint16_t width, uint8_t thickness, const int16_t xPos, const int16_t yPos)
       : PageElement(xPos, yPos), width(width), thickness(thickness) {}
 
-  void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) override;
+  void render(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) override;
   bool serialize(FsFile& file) override;
   PageElementTag getTag() const override { return TAG_PageHorizontalRule; }
   static std::unique_ptr<PageHorizontalRule> deserialize(FsFile& file);
@@ -136,7 +148,7 @@ class PageTableFragment final : public PageElement {
         lineHeight(lineHeight),
         rows(std::move(rows)) {}
 
-  void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) override;
+  void render(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) override;
   bool serialize(FsFile& file) override;
   PageElementTag getTag() const override { return TAG_PageTableFragment; }
   static std::unique_ptr<PageTableFragment> deserialize(FsFile& file);
@@ -160,6 +172,10 @@ class Page {
   static constexpr uint8_t INITIAL_FOOTNOTE_RESERVE = 2;
   static constexpr uint8_t MAX_PUBLISHER_PAGE_MARKERS_PER_PAGE = 8;
   static constexpr uint8_t INITIAL_PUBLISHER_PAGE_MARKER_RESERVE = 2;
+  // Lingua: range of original paragraph indices contributing to this page (for
+  // the Page Translation overlay to know what to surface for the current page). -1 = none/unset.
+  int16_t firstParagraphIdx = -1;
+  int16_t lastParagraphIdx = -1;
 
   void addFootnote(const char* number, const char* href, const uint8_t linkId = 0) {
     if (linkId != 0 && std::any_of(footnotes.begin(), footnotes.end(),
@@ -191,12 +207,12 @@ class Page {
     publisherPageMarkers.push_back(marker);
   }
 
-  void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) const;
-  void renderText(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) const;
-  void renderImages(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) const;
+  void render(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) const;
+  void renderText(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) const;
+  void renderImages(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset, bool foregroundBlack = true) const;
   // When renderCachedImages is false, draw placeholders without checking or
   // reading image caches. This keeps transient queued pages free of image I/O.
-  void renderWithImagePlaceholders(GfxRenderer& renderer, int fontId, int xOffset, int yOffset,
+  void renderWithImagePlaceholders(GfxRenderer& renderer, const PageFontSet& fonts, int xOffset, int yOffset,
                                    bool foregroundBlack = true, bool renderCachedImages = true) const;
   bool forEachTextLine(PageTextLineVisitor visitor, void* context) const;
   bool serialize(FsFile& file) const;

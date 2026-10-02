@@ -33,6 +33,12 @@ class GfxRenderer {
  public:
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
+  // "No forced ink" sentinel for setForcedInk() / ForcedInkScope. Deliberately NOT 0: 0 IS a level
+  // (solid black), and forcing black is the whole point of the primitive -- it is what lets a line
+  // role override the per-word TRANSLATED style bit in BOTH directions. Mirrored by
+  // PageFontSet::INK_INHERIT (lib/Epub); a static_assert in Page.cpp keeps the two equal.
+  static constexpr uint8_t INK_INHERIT = 0xFF;
+
   // Logical screen orientation from the perspective of callers
   enum Orientation {
     Portrait,                  // 480x800 logical coordinates (current default)
@@ -104,6 +110,16 @@ class GfxRenderer {
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
   // as before, concentrated in a single pointer instead of four fields.
   mutable FontCacheManager* fontCacheManager_ = nullptr;
+
+  uint8_t translationGrayLevel = 0;  // 0=black (default), 1=dark gray, 2=light gray.
+                                     // Applied to words tagged with EpdFontFamily::TRANSLATED.
+
+  // Forced ink for EVERY glyph of the current draw, whatever its style bits say. INK_INHERIT (the
+  // default) leaves the TRANSLATED-bit path above untouched, so a renderer that never sets this is
+  // bit-identical to before. Any other value (0=black, 1=dark gray, 2=light gray) WINS over the
+  // style bit -- that is what makes "this line is black" expressible, not just "this line is gray".
+  // Set only by PageLine::render through ForcedInkScope, so its lifetime is exactly one line.
+  uint8_t forcedInk = INK_INHERIT;
 
   // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
   // size-matched SD-card font id that carries CJK glyphs. When a string drawn
@@ -329,6 +345,28 @@ class GfxRenderer {
   bool supportsDirectGrayscale() const;
   bool displayDirectGrayscaleBase(HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
   RenderMode getRenderMode() const { return renderMode; }
+  // Lingua: gray level applied to glyphs whose style carries the TRANSLATED bit.
+  // 0=black (default, no remap), 1=dark gray (also drawn in BW pass as fallback), 2=light gray.
+  void setTranslationGrayLevel(uint8_t level) { translationGrayLevel = level; }
+  uint8_t getTranslationGrayLevel() const { return translationGrayLevel; }
+  // Per-ROLE ink (Lingua colour sub-settings). The app resolves a line's LineFontRole to an ink
+  // level and the whole line draws in it, which is why the colour of an annotation row or a
+  // translation column is decided ONCE per line here instead of per word through the style bit.
+  // INK_INHERIT restores the style-bit behaviour.
+  void setForcedInk(const uint8_t ink) { forcedInk = ink; }
+  uint8_t getForcedInk() const { return forcedInk; }
+
+  // RAII setter for the above: no heap, no std::function, one byte saved and restored. Nested
+  // scopes work (each restores its predecessor's value), which keeps a future overlay that draws a
+  // line inside another line's scope honest.
+  struct ForcedInkScope {
+    GfxRenderer& renderer;
+    uint8_t previous;
+    ForcedInkScope(GfxRenderer& r, const uint8_t ink) : renderer(r), previous(r.getForcedInk()) { r.setForcedInk(ink); }
+    ~ForcedInkScope() { renderer.setForcedInk(previous); }
+    ForcedInkScope(const ForcedInkScope&) = delete;
+    ForcedInkScope& operator=(const ForcedInkScope&) = delete;
+  };
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload
   // takes the gray region in LOGICAL screen coordinates and rotates it to the
   // panel; the no-arg overload settles the full frame. Call after the BW base
@@ -363,6 +401,21 @@ class GfxRenderer {
   void releaseFrameBufferForBuild();
   bool restoreFrameBufferAfterBuild();
   bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+
+  // FREE the 48 KB framebuffer to the heap for a memory-hungry NETWORK phase
+  // (the translation TLS handshake). Unlike releaseFrameBufferForBuild(), which
+  // LENDS the bytes without freeing them (a loan cannot help malloc-based TLS),
+  // this actually returns the allocation to the heap so the TLS allocator can
+  // use the hole. Between release and a successful restore NOTHING may draw or
+  // display — hasFrameBuffer() reports false and the caller (translator
+  // render()) must suppress all drawing; the panel keeps its last refreshed
+  // image. restore reallocates and returns the buffer WHITE, so the caller must
+  // fully redraw. release returns false if the buffer is absent (already
+  // released or lent to a build); restore returns false if the realloc fails
+  // (out of memory — the caller must recover, e.g. free transients + retry,
+  // then restart as a last resort).
+  bool releaseFrameBufferForNetwork();
+  bool restoreFrameBufferAfterNetwork();
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

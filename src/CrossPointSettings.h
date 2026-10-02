@@ -410,6 +410,158 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 
   // UI scale for list-style screens: sizes list fonts and row heights
   // together so touch targets grow uniformly.
+  // Lingua feature: how translated text renders on e-ink.
+  // VALUE STABILITY: translationDisplayMode persists as this integer in settings.json, so new
+  // modes MUST be APPENDED at the end — never inserted or renumbered — or existing on-device
+  // saves are silently reinterpreted. LINGUA_TOOLTIP is therefore 7 here even though the upstream
+  // fork numbered its tooltip mode 6 (its enum ordered TOOLTIP before its Modal mode); v2 had
+  // already shipped that mode as 6 — LINGUA_PAGE_TRANSLATION — so tooltip appends as 7.
+  //
+  // PERMANENT HOLES: 1 and 2. They were the "Dimmed" / "Dimmed Light" modes, which are now ONE
+  // mode (LINGUA_INTERLEAVED) plus the translationShade colour sub-setting. The two values are retired,
+  // NEVER selectable (they are absent from LINGUA_SELECTABLE_MODES in LinguaModeCatalog.h) and
+  // migrated to LINGUA_INTERLEAVED + shade at load (see fromJson). They are kept as holes — never
+  // reused, never renumbered — so an old settings.json is migrated rather than reinterpreted.
+  enum LINGUA_MODE : uint8_t {
+    LINGUA_NORMAL = 0,
+    LINGUA_LEGACY_DIMMED = 1,        // retired hole -> LINGUA_INTERLEAVED + SHADE_DIMMED
+    LINGUA_LEGACY_DIMMED_LIGHT = 2,  // retired hole -> LINGUA_INTERLEAVED + SHADE_DIMMED_LIGHT
+    LINGUA_ORIGINAL_ONLY = 3,
+    LINGUA_TRANSLATION_ONLY = 4,
+    LINGUA_SIDE_BY_SIDE = 5,
+    LINGUA_PAGE_TRANSLATION = 6,
+    LINGUA_TOOLTIP = 7,
+    LINGUA_INTERLEAVED = 8,
+    // Each sentence's translation on its own small line ABOVE the source line it starts on. The one
+    // mode with a layout that is not shared with any other (LinguaLayout::Interlinear).
+    LINGUA_INTERLINEAR = 9,
+  };
+  // LOAD-TIME VALIDITY BOUND ONLY: fromJson() clamps a stored translationDisplayMode >= this to
+  // LINGUA_NORMAL. It is deliberately NOT an enumerator and NOT a UI iteration count — the retired
+  // holes at 1 and 2 make the value range non-contiguous, so every UI list and cycle walks
+  // LINGUA_SELECTABLE_MODES instead (modules/lingua/LinguaModeCatalog.h).
+  static constexpr uint8_t LINGUA_MODE_COUNT = LINGUA_INTERLINEAR + 1;
+
+  // Lingua: colour of translated text in Interleaved mode (LINGUA_INTERLEAVED). It selects the
+  // renderer's gray level for words carrying the TRANSLATED style bit.
+  // DRAWING ONLY: it never changes word measurement, line breaking or pagination, so it must NOT
+  // enter the section.bin cache key (ReaderRenderSpec) — switching shade stays instant.
+  // VALUE STABILITY: persisted as an integer; 0/1 are fixed — append only, never renumber.
+  enum TRANSLATION_SHADE : uint8_t { SHADE_DIMMED = 0, SHADE_DIMMED_LIGHT = 1, TRANSLATION_SHADE_COUNT };
+
+  // Lingua: colour of the SECONDARY text in the two modes that render it as its own
+  // typographic object rather than inline — the annotation rows in Interlinear and the translation
+  // column in Side by Side.
+  //
+  // NOT the same value space as TRANSLATION_SHADE above, deliberately: that one is Interleaved's,
+  // its 0/1 are persisted and documented append-only, and it offers no Black because inline
+  // translated text drawn black is indistinguishable from the source (that IS Normal mode). Here
+  // the text is separated by position, so Black is meaningful and is the default.
+  //
+  // The VALUES ARE the renderer's ink levels (0/1/2), so the resolvers below hand them straight to
+  // PageFontSet without a mapping table. That coupling is append-safe for PERSISTENCE but not for
+  // RENDERING: renderCharImpl's chain tests 0, 1 and 2 explicitly and has no else, so a fourth
+  // enumerator would draw nothing at all rather than degrade. A new shade needs a renderer level
+  // first.
+  // DRAWING ONLY: applied per-line at render time through LineFontRole, never a layout input, so it
+  // must NOT enter ReaderRenderSpec, section.bin or the reader's re-layout gate.
+  // NEEDS THE GRAYSCALE PASSES: levels 1 and 2 are painted by the LSB/MSB plane passes, which
+  // renderContents() runs only when Text Anti-Aliasing is on (needsTextGrayscale). With it off all
+  // three levels take the same BW full-coverage fallback and the row has NO visible effect — not a
+  // degradation to black, an exact no-op. Pre-existing for Interleaved's shade; deliberately not
+  // guarded in the UI, because the setting is still correct and applies the moment AA is turned on.
+  // VALUE STABILITY: persisted as an integer; append only, never renumber.
+  enum LINGUA_SHADE : uint8_t {
+    LINGUA_BLACK = 0,
+    LINGUA_GREY = 1,
+    LINGUA_GREY_LIGHT = 2,
+    LINGUA_SHADE_COUNT,
+  };
+
+  // Lingua: type size of the TRANSLATED text relative to the book's own text.
+  // SIZE_SMALLER means one step DOWN the active family's point-size ladder, resolved by
+  // smallerReaderFontId().
+  // ONE ENUM, THREE INDEPENDENT FIELDS: the value space is shared, the choice is not. Each mode
+  // that shows translated text owns its own stored size (interleavedTranslationSize,
+  // tooltipTranslationSize, pageTranslationSize) because the three answer different questions and
+  // have different costs — the Interleaved size is a LAYOUT difference (narrower glyphs re-break
+  // lines) and so enters the section cache key, while the two overlay sizes are composited at view
+  // time over an unchanged page and must NOT invalidate anything. Sharing one field made shrinking
+  // the tooltip silently re-lay out the whole book.
+  // AVAILABILITY: SIZE_SMALLER is only offered when the active family actually ships a smaller
+  // face; where it does not, smallerReaderFontId() returns 0 and everything behaves as SIZE_SAME
+  // without the stored value being rewritten (see smallerReaderFontId()).
+  // VALUE STABILITY: persisted as an integer; 0/1 are fixed — append only, never renumber.
+  enum TRANSLATION_SIZE : uint8_t { SIZE_SAME = 0, SIZE_SMALLER = 1, TRANSLATION_SIZE_COUNT };
+
+  // Lingua: type size of Interlinear's ANNOTATION ROWS. Its own value space, NOT TRANSLATION_SIZE:
+  // that enum is relative to the body text ("same" / "one step down the reader ladder"), while these
+  // rows have never been on the reader ladder at all -- they are a fixed small UI face sitting above
+  // a source line, so the meaningful choice is an absolute point size, not a relation.
+  //
+  // The three point sizes resolve to the UI faces registered unconditionally in main.cpp
+  // (SMALL_FONT_ID / UI_10_FONT_ID / UI_12_FONT_ID), so no build carries a font for this row that it
+  // did not already carry: all three are the everyday menu faces, they live in flash as static const
+  // bitmaps, and EpdFont holds nothing but a pointer to them. ANNOTATION_BODY is font id 0, the
+  // "same as the body font" signal that this resolver already returns for an unsupported script.
+  //
+  // SCRIPT COVERAGE is identical across the three: edslab_ui_8/10/12 are generated from the same
+  // fontconvert source list (EdsLab + Noto Hebrew/Arabic + Ubuntu Vietnamese), so
+  // interlinearAnnotationScriptSupported() gates all of them with one predicate.
+  // LAYOUT INPUT: unlike the shade, the size changes line breaking and row height, so it reaches
+  // ReaderRenderSpec::annotationFontId and the section cache. See getInterlinearAnnotationFontId().
+  // VALUE STABILITY: persisted as an integer; append only, never renumber.
+  // NO "same as the body font" OPTION, deliberately. It was offered during development and removed
+  // before release: an annotation face as wide as the body text needs about as much room as the
+  // sentence it translates, and a translation is usually LONGER than its source, so every sentence
+  // overflowed its strips. Interlinear answers overflow by carrying the tail forward, which means
+  // that option turned the carry on permanently -- the translation drifted away from its sentence
+  // everywhere, which is the one thing the mode exists to get right. The three point sizes below all
+  // stay narrower than any body size the reader offers (12-18pt), so the carry stays exceptional.
+  enum INTERLINEAR_ANNOTATION_SIZE : uint8_t {
+    ANNOTATION_8PT = 0,  // the pre-existing fixed face, and still the default
+    ANNOTATION_10PT = 1,
+    ANNOTATION_12PT = 2,
+    INTERLINEAR_ANNOTATION_SIZE_COUNT
+  };
+
+  // Lingua feature: translation backend selection
+  // Values match upstream fork (crosspoint-reader) to keep JSON-stored indices stable.
+  // VALUE STABILITY: persisted as an integer — append only, never renumber.
+  enum TRANSLATION_ENGINE : uint8_t {
+    ENGINE_GOOGLE_FREE = 0,
+    ENGINE_DEEPL = 1,
+    ENGINE_DEEPL_PRO = 2,
+    ENGINE_OPENAI = 3,
+    ENGINE_DEEPSEEK = 4,
+    ENGINE_GEMINI = 5,
+    ENGINE_GOOGLE_V2 = 6,
+    ENGINE_GOOGLE_HTML = 7,
+    // Microsoft's Edge-browser translator deployment (api-edge.cognitive.microsofttranslator.com),
+    // authenticated with an anonymous short-lived token from edge.microsoft.com/translate/auth.
+    // This is NOT the paid Azure Translator resource (api.cognitive.microsofttranslator.com),
+    // which would need a subscription key + region — this endpoint is keyless, so no UI is needed.
+    ENGINE_AZURE = 8,
+    TRANSLATION_ENGINE_COUNT
+  };
+
+  // Which physical button pair drives a translation overlay (tooltip sentence stepping /
+  // Page Translation scrolling). Shared by tooltipButtons and pageTranslationButtons.
+  // VALUE STABILITY: persisted as an integer; 0/1 are fixed — append only, never renumber.
+  enum OVERLAY_BUTTONS : uint8_t {
+    OVERLAY_BUTTONS_FRONT = 0,  // front pair (Left / Right)
+    OVERLAY_BUTTONS_SIDE = 1,   // side pair (PageBack / PageForward)
+    OVERLAY_BUTTONS_COUNT
+  };
+
+  // What tooltip stepping does when it reaches a page boundary (last/first sentence).
+  // VALUE STABILITY: persisted as an integer; 0/1 are fixed — append only, never renumber.
+  enum TOOLTIP_NAVIGATION : uint8_t {
+    TOOLTIP_NAV_LOOP = 0,       // wrap to the first/last sentence, stay on the page
+    TOOLTIP_NAV_TURN_PAGE = 1,  // turn the page and continue stepping on the next page
+    TOOLTIP_NAVIGATION_COUNT
+  };
+
   enum UI_SCALE { UI_SCALE_SMALL = 0, UI_SCALE_LARGE = 1, UI_SCALE_COUNT };
   static uint8_t defaultUiScale();
 
@@ -528,6 +680,60 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t lineSpacing = NORMAL;  // migration only; new saves use lineHeightPercent
   uint8_t lineHeightPercent = 100;
   uint8_t wordSpacing = 0;
+
+  // Lingua feature
+  // translationLanguage: index into LanguagePickerActivity::LANGUAGES[], 0xFF = unset
+  uint8_t translationLanguage = 0xFF;
+  // sourceTranslationLanguage: 0xFF = auto-detect, otherwise LANGUAGES[] index
+  uint8_t sourceTranslationLanguage = 0xFF;
+  uint8_t translationEngine = ENGINE_GOOGLE_V2;
+  char translateApiKey[128] = "";
+  uint8_t translationDisplayMode = LINGUA_NORMAL;
+  // Interleaved-mode (LINGUA_INTERLEAVED) translated-text colour. Drawing-only; see TRANSLATION_SHADE.
+  uint8_t translationShade = SHADE_DIMMED;
+  // ONE FIELD PER MODE, never shared — same rule as the three translated-text sizes below. The two
+  // modes present the secondary text completely differently (an 8pt row above the line vs a
+  // full-size half-width column), so the shade that reads well in one is not the one that reads
+  // well in the other. Both default to Black, i.e. exactly what each mode drew before the row
+  // existed, so an upgrade changes nothing on screen. See LINGUA_SHADE.
+  uint8_t interlinearAnnotationShade = LINGUA_BLACK;
+  // Interlinear annotation row size. Defaults to ANNOTATION_8PT, the face the rows were fixed at
+  // before this row existed, so an upgrade changes nothing on screen. Mirrored in fromJson().
+  uint8_t interlinearAnnotationSize = ANNOTATION_8PT;
+  // Interlinear can temporarily hide its annotation rows while keeping their layout space. When
+  // enabled, a long press of either button in the selected pair toggles their visibility and takes
+  // precedence over the button's normal reader action.
+  uint8_t interlinearToggleByLongPress = 1;
+  uint8_t interlinearToggleButtons = OVERLAY_BUTTONS_SIDE;
+  uint8_t sideBySideTranslationShade = LINGUA_BLACK;
+  // Translated-text type size — ONE field per mode that shows translated text, never shared (see
+  // TRANSLATION_SIZE). The defaults differ on purpose and each is the mode's own pre-existing
+  // behaviour, so an upgrade changes nothing on screen:
+  //  - Interleaved draws the translation in the main flow, where a smaller face would re-break every
+  //    line; it has always matched the body text, so SIZE_SAME.
+  //  - Tooltip and Page Translation composite an overlay over the page, and both have ALWAYS drawn it
+  //    one step down the ladder (getTooltipFontId() called smallerReaderFontId() unconditionally
+  //    before the row existed), so SIZE_SMALLER. Defaulting these to Same would have handed every
+  //    existing user body-size overlays on upgrade.
+  // These three defaults are mirrored in fromJson(); keep the pairs in sync.
+  uint8_t interleavedTranslationSize = SIZE_SAME;
+  uint8_t tooltipTranslationSize = SIZE_SMALLER;
+  uint8_t pageTranslationSize = SIZE_SMALLER;
+  // Tooltip display mode (LINGUA_TOOLTIP) controls. Ported from the upstream fork.
+  // tooltipButtons: which button pair steps through per-sentence tooltips (OVERLAY_BUTTONS).
+  //   Default SIDE — the page-turn pair reads as the natural "next sentence" control.
+  // tooltipBehavior: what stepping does at a page boundary (TOOLTIP_NAVIGATION).
+  //   Default TURN_PAGE — stepping past the last sentence turns the page and continues.
+  // Persisted manually in toJson/fromJson alongside the other Lingua fields (they are
+  // edited from the Lingua submenu, not the generic on-device Settings list).
+  uint8_t tooltipButtons = OVERLAY_BUTTONS_SIDE;
+  uint8_t tooltipBehavior = TOOLTIP_NAV_TURN_PAGE;
+  // Page Translation display mode (LINGUA_PAGE_TRANSLATION) control: which button pair scrolls/closes
+  // the OPEN overlay (OVERLAY_BUTTONS). The overlay still OPENS on a side long-press regardless of
+  // this setting. Default SIDE (same pair that opened it). Persisted manually in toJson/fromJson,
+  // under the "pageTranslationButtons" key (legacy files stored it as "modalButtons"; fromJson
+  // reads that as a fallback and resaves).
+  uint8_t pageTranslationButtons = OVERLAY_BUTTONS_SIDE;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
@@ -712,6 +918,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t getSdFontTargetPointSize() const;
   bool changeReaderFontSize(bool larger, FontSizeStepMode mode = FontSizeStepMode::Wrap);
   int getReaderFontId() const;
+  // Lingua: the reader font id one step DOWN the active family's point-size ladder, or 0 when the
+  // family has no smaller face (SD families, or the smallest built-in size).
+  int smallerReaderFontId() const;
   int getBuiltInReaderFontId() const;
 
   // If count_only is true, returns the number of settings items that would be written.
@@ -745,6 +954,19 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   StatusBarSpec statusBarSpec() const;
+  // Lingua: which page LAYOUT a display mode implies. THE mode -> layout mapping.
+  static LinguaLayout linguaLayoutForDisplayMode(uint8_t mode);
+  // Lingua: font id the TRANSLATED text is drawn in, or 0 for "same as the body font". One resolver
+  // per owning mode: the first two are LAYOUT inputs (reach the section cache key), the last two are
+  // view-time overlay sizes that must never reach a ReaderRenderSpec.
+  int getInterleavedTranslationFontId() const;
+  int getInterlinearAnnotationFontId() const;
+  int getTooltipTranslationFontId() const;
+  int getPageTranslationOverlayFontId() const;
+  // Lingua: whether the Interlinear annotation UI face covers the selected target script.
+  bool interlinearAnnotationScriptSupported() const;
+  int translationFontIdForSize(uint8_t sizeSetting) const;
+
   ReaderRenderSpec readerRenderSpec(uint16_t viewportWidth, uint16_t viewportHeight,
                                     EpubRenderMode renderMode = EpubRenderMode::CrossInkDefault) const;
 

@@ -1,5 +1,6 @@
 #include <HalDisplay.h>
 #include <HalGPIO.h>
+#include <Logging.h>
 
 #include "HalSpiBus.h"
 
@@ -122,6 +123,22 @@ uint8_t* HalDisplay::getFrameBuffer() const { return einkDisplay.getFrameBuffer(
 uint8_t* HalDisplay::lendFrameBufferStorage(uint32_t* sizeOut) { return einkDisplay.lendBuildStorage(sizeOut); }
 
 void HalDisplay::returnFrameBufferStorage() { einkDisplay.returnBuildStorage(); }
+
+bool HalDisplay::releaseFrameBufferStorageForNetwork() {
+  // framebufferReady() is true only in normal mode; it is false both when the
+  // buffer is already released AND while it is LENT to a build (lendBuildStorage
+  // nulls frameBuffer but keeps frameBuffer0 allocated). In the lent case,
+  // releaseBuffers() would free() the block the borrower still holds — a
+  // use-after-free — so refuse whenever the framebuffer is not live.
+  if (!einkDisplay.framebufferReady()) {
+    LOG_ERR("DISP", "releaseFrameBufferStorageForNetwork: framebuffer not available (released or lent)");
+    return false;
+  }
+  einkDisplay.releaseBuffers();
+  return true;
+}
+
+bool HalDisplay::reallocFrameBufferStorage() { return einkDisplay.reallocBuffers(); }
 
 void HalDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
   einkDisplay.copyGrayscaleBuffers(lsbBuffer, msbBuffer);

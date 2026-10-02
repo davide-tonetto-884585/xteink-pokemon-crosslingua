@@ -26,20 +26,32 @@ uint16_t tableSelectionForLine(const size_t elementIndex, const uint8_t logicalC
 
 template <typename Predicate>
 void renderFilteredPageElements(const std::vector<std::unique_ptr<PageElement>>& elements, GfxRenderer& renderer,
-                                const int fontId, const int xOffset, const int yOffset, const bool foregroundBlack,
-                                Predicate&& predicate) {
+                                const PageFontSet& fonts, const int xOffset, const int yOffset,
+                                const bool foregroundBlack, Predicate&& predicate) {
   for (const auto& element : elements) {
     if (predicate(*element)) {
-      element->render(renderer, fontId, xOffset, yOffset, foregroundBlack);
+      element->render(renderer, fonts, xOffset, yOffset, foregroundBlack);
     }
   }
 }
 
 }  // namespace
 
-void PageLine::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+// The two ink sentinels are declared in different libraries (lib/Epub must not depend on the concrete
+// renderer type in a header), so pin them together where both are visible.
+static_assert(PageFontSet::INK_INHERIT == GfxRenderer::INK_INHERIT, "PageFontSet ink sentinel must match the renderer's");
+
+void PageLine::render(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                       const bool foregroundBlack) {
-  block->render(renderer, fontId, xPos + xOffset, yPos + yOffset, foregroundBlack);
+  if (fontRole == LineFontRole::Annotation && !fonts.annotationVisible) return;
+  // A line is homogeneous, so the role resolves to ONE id here and TextBlock keeps its plain
+  // int fontId — the mixed-font page is a property of the page, not of any single line.
+  //
+  // Same for the ink: colour is applied at the LINE boundary from the role, not per word from a
+  // style bit. Scope-guarded because a page is drawn three times (BW + LSB + MSB planes) and each
+  // pass must set and clear it again; a latch would leak one line's colour into the next.
+  const GfxRenderer::ForcedInkScope ink(renderer, fonts.inkForRole(fontRole));
+  block->render(renderer, fonts.forRole(fontRole), xPos + xOffset, yPos + yOffset, foregroundBlack);
 }
 
 bool PageLine::serialize(FsFile& file) {
@@ -49,7 +61,14 @@ bool PageLine::serialize(FsFile& file) {
   }
 
   // serialize TextBlock pointed to by PageLine
-  return block->serialize(file);
+  if (!block->serialize(file)) return false;
+  // Lingua: paragraph index + per-line font role (section-cache version bump forces a full re-read).
+  if (!serialization::tryWritePod(file, paragraphIdx) ||
+      !serialization::tryWritePod(file, static_cast<uint8_t>(fontRole))) {
+    LOG_ERR("PGE", "Serialization failed: could not write PageLine Lingua fields");
+    return false;
+  }
+  return true;
 }
 
 std::unique_ptr<PageLine> PageLine::deserialize(FsFile& file) {
@@ -66,18 +85,32 @@ std::unique_ptr<PageLine> PageLine::deserialize(FsFile& file) {
     return nullptr;
   }
 
+  // Lingua: paragraph index and font role written after the TextBlock (see serialize()). An unknown
+  // role value would mean a corrupt file; clamp to Body rather than index a font set out of range.
+  int16_t paragraphIdx = -1;
+  uint8_t roleByte = 0;
+  if (!serialization::tryReadPod(file, paragraphIdx) || !serialization::tryReadPod(file, roleByte)) {
+    LOG_ERR("PGE", "Deserialization failed: truncated PageLine Lingua fields");
+    return nullptr;
+  }
+  const LineFontRole fontRole = (roleByte <= static_cast<uint8_t>(LineFontRole::Annotation))
+                                    ? static_cast<LineFontRole>(roleByte)
+                                    : LineFontRole::Body;
+
   auto* pageLine = new (std::nothrow) PageLine(std::move(tb), xPos, yPos);
   if (!pageLine) {
     LOG_ERR("PGE", "Deserialization failed: could not allocate PageLine");
     return nullptr;
   }
+  pageLine->paragraphIdx = paragraphIdx;
+  pageLine->fontRole = fontRole;
   return std::unique_ptr<PageLine>(pageLine);
 }
 
-void PageImage::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+void PageImage::render(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                        const bool foregroundBlack) {
-  (void)fontId;
-  // Images don't use fontId for text rendering
+  (void)fonts;
+  // Images don't use fonts for text rendering
   imageBlock->render(renderer, xPos + xOffset, yPos + yOffset, foregroundBlack);
 }
 
@@ -118,9 +151,9 @@ std::unique_ptr<PageImage> PageImage::deserialize(FsFile& file) {
   return std::unique_ptr<PageImage>(pageImage);
 }
 
-void PageHorizontalRule::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+void PageHorizontalRule::render(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                                 const bool foregroundBlack) {
-  (void)fontId;
+  (void)fonts;
   if (width == 0 || thickness == 0) {
     return;
   }
@@ -271,7 +304,7 @@ uint16_t PageTableFragment::getHeight() const {
   return total;
 }
 
-void PageTableFragment::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+void PageTableFragment::render(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                                const bool foregroundBlack) {
   if (columnCount == 0 || rows.empty() || width < 2) {
     return;
@@ -309,7 +342,7 @@ void PageTableFragment::render(GfxRenderer& renderer, const int fontId, const in
 
       renderer.beginTextClip(cellTextX, cellTextY, cellTextWidth, cellTextHeight);
       for (size_t lineIndex = 0; lineIndex < cell.lines.size(); lineIndex++) {
-        cell.lines[lineIndex]->render(renderer, fontId, cellTextX, cellTextY + static_cast<int>(lineIndex) * lineHeight,
+        cell.lines[lineIndex]->render(renderer, fonts.body, cellTextX, cellTextY + static_cast<int>(lineIndex) * lineHeight,
                                       foregroundBlack);
       }
       renderer.endTextClip();
@@ -467,27 +500,27 @@ std::unique_ptr<PageTableFragment> PageTableFragment::deserialize(FsFile& file) 
   return std::unique_ptr<PageTableFragment>(fragment);
 }
 
-void Page::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+void Page::render(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                   const bool foregroundBlack) const {
-  renderText(renderer, fontId, xOffset, yOffset, foregroundBlack);
-  renderImages(renderer, fontId, xOffset, yOffset, foregroundBlack);
+  renderText(renderer, fonts, xOffset, yOffset, foregroundBlack);
+  renderImages(renderer, fonts, xOffset, yOffset, foregroundBlack);
 }
 
-void Page::renderText(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+void Page::renderText(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                       const bool foregroundBlack) const {
-  renderFilteredPageElements(elements, renderer, fontId, xOffset, yOffset, foregroundBlack,
+  renderFilteredPageElements(elements, renderer, fonts, xOffset, yOffset, foregroundBlack,
                              [](const PageElement& element) { return element.getTag() != TAG_PageImage; });
 }
 
-void Page::renderImages(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+void Page::renderImages(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                         const bool foregroundBlack) const {
-  renderFilteredPageElements(elements, renderer, fontId, xOffset, yOffset, foregroundBlack,
+  renderFilteredPageElements(elements, renderer, fonts, xOffset, yOffset, foregroundBlack,
                              [](const PageElement& element) { return element.getTag() == TAG_PageImage; });
 }
 
-void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
+void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const PageFontSet& fonts, const int xOffset, const int yOffset,
                                        const bool foregroundBlack, const bool renderCachedImages) const {
-  renderText(renderer, fontId, xOffset, yOffset, foregroundBlack);
+  renderText(renderer, fonts, xOffset, yOffset, foregroundBlack);
   for (const auto& element : elements) {
     if (element->getTag() != TAG_PageImage) {
       continue;
@@ -496,7 +529,7 @@ void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, 
     if (!renderCachedImages || pageImage.getImageBlock().needsDecode()) {
       pageImage.renderPlaceholder(renderer, xOffset, yOffset, foregroundBlack);
     } else {
-      pageImage.render(renderer, fontId, xOffset, yOffset, foregroundBlack);
+      pageImage.render(renderer, fonts, xOffset, yOffset, foregroundBlack);
     }
   }
 }
@@ -587,6 +620,12 @@ bool Page::serialize(FsFile& file) const {
       LOG_ERR("PGE", "Failed to write publisher page marker");
       return false;
     }
+  }
+
+  // Lingua: paragraph range for this page.
+  if (!serialization::tryWritePod(file, firstParagraphIdx) || !serialization::tryWritePod(file, lastParagraphIdx)) {
+    LOG_ERR("PGE", "Failed to write Lingua paragraph range");
+    return false;
   }
 
   return true;
@@ -690,6 +729,13 @@ std::unique_ptr<Page> Page::deserialize(FsFile& file) {
     }
     marker.label[sizeof(marker.label) - 1] = '\0';
     page->publisherPageMarkers.push_back(marker);
+  }
+
+  // Lingua: paragraph range (always present: the section version bump invalidates older files).
+  if (!serialization::tryReadPod(file, page->firstParagraphIdx) ||
+      !serialization::tryReadPod(file, page->lastParagraphIdx)) {
+    LOG_ERR("PGE", "Failed to read Lingua paragraph range");
+    return nullptr;
   }
 
   return page;

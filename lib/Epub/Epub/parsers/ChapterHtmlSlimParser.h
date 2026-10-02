@@ -5,6 +5,7 @@
 #include <ZipFile.h>
 #include <expat.h>
 
+#include <algorithm>
 #include <array>
 #include <climits>
 #include <functional>
@@ -16,12 +17,15 @@
 #include "Epub/EpubRenderMode.h"
 #include "Epub/FootnoteEntry.h"
 #include "Epub/Page.h"
+#include "Epub/PageFontSet.h"
 #include "Epub/ParsedText.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
 #include "Epub/css/CssStyle.h"
 #include "Epub/tables/CompactTableLayout.h"
+#include "modules/lingua/layout/LinguaLayout.h"
+#include "modules/lingua/modes/interlinear/InterlinearAnnotation.h"
 
 class GfxRenderer;
 class Epub;
@@ -98,6 +102,42 @@ class ChapterHtmlSlimParser {
   bool lowMemoryAbort = false;
   bool attemptedTextLayoutFontCacheRelease = false;
   EpubRenderMode renderMode = EpubRenderMode::CrossInkDefault;
+
+  // ---- Lingua (CrossLingua translation module) -------------------------------------------------
+  // The page layout to produce. The parser never sees the user's display mode --
+  // CrossPointSettings::linguaLayoutForDisplayMode() collapses the modes onto these layouts.
+  LinguaLayout linguaLayout = LinguaLayout::Both;
+  // Font the TRANSLATED text is laid out in, or 0 for "same as fontId" (the ONLY unset sentinel).
+  int translationFontId = 0;
+  // (Interlinear) font the small ANNOTATION rows are laid out in, or 0 for "same as fontId".
+  int annotationFontId = 0;
+  // (Interlinear) the app's sentence aligner; nullptr means "no annotations".
+  InterlinearPairFn interlinearPairFn = nullptr;
+  // Reusable annotation buffer for the interlinear pass, sized once on the first annotated paragraph.
+  std::vector<InterlinearAnnotation> interlinearAnnotations;
+  // Monotonic index over ORIGINAL content paragraphs (see ParagraphBoundary.h SSOT shared with the
+  // PageTranslationOverlay/TooltipOverlay reparsers). Translated blocks do NOT advance it.
+  int16_t paragraphCounter = 0;
+  // Paragraph index stamped on the currently-open block's laid-out lines; -1 before any block opens.
+  int16_t currentBlockParagraphIdx = -1;
+  // True once the current physical text block has been assigned a paragraph index.
+  bool currentBlockIndexAssigned = false;
+  // True when the currently-open block has lang= differing from bookPrimaryLang.
+  bool currentBlockIsTranslated = false;
+  // Depth of the outermost open element that introduced a translated lang= (INT_MAX = none). Every
+  // word parsed while it is open belongs to a translated block (mirrors boldUntilDepth & co.).
+  int translatedFromDepth = INT_MAX;
+  std::string bookPrimaryLang;      // Book's content.opf language; a differing lang= marks a translated block
+  std::string translatedHyphenLang;  // Last lang= applied to the Hyphenator's translated slot
+  // (SideBySide and Interlinear) the current ORIGINAL block is buffered here until its paired
+  // translation arrives, together with its paragraph index and its footnote ledger.
+  std::unique_ptr<ParsedText> bufferedOriginalBlock = nullptr;
+  int16_t bufferedOriginalParagraphIdx = -1;
+  std::vector<std::pair<int, FootnoteEntry>> bufferedOriginalFootnotes;
+  int bufferedOriginalWordsExtracted = 0;
+  bool inTranslatedText() const { return translatedFromDepth != INT_MAX; }
+  // --------------------------------------------------------------------------------------------
+
   std::string previewAnchor;
   uint16_t previewMaxPages = 0;
   bool previewAnchorFound = false;
@@ -254,6 +294,58 @@ class ChapterHtmlSlimParser {
   void addPendingPublisherPageMarker(const char* label);
   void attachPendingPublisherPageMarkers(int yPos);
   void flushPartWordBuffer();
+  // Lingua: true when the block currently being parsed is one the active linguaLayout drops.
+  bool wordIsFiltered() const;
+  // Lingua: settle a <br>-opened block's translation state and paragraph index from its first word.
+  void classifyBrOpenedBlock();
+  // Lingua: stamp the just-opened block's translation state and paragraph index.
+  void stampLinguaBlockOpen(bool translated);
+  // Lingua: the role every line of the currently-open block carries.
+  LineFontRole currentLineRole() const;
+  // The font id a role is MEASURED and ADVANCED with (same resolver the renderer uses).
+  int fontIdForRole(const LineFontRole role) const {
+    return PageFontSet(fontId, translationFontId, annotationFontId).forRole(role);
+  }
+  // Deliver every anchor still pending for the block just laid out to the page currently being built.
+  void flushPendingFootnotesToCurrentPage();
+  // Lingua: one block's footnote ledger -- the anchors pending for it and their word base.
+  struct FootnoteLedger {
+    std::vector<std::pair<int, FootnoteEntry>> pending;
+    int wordBase = 0;
+  };
+  [[nodiscard]] FootnoteLedger adoptBufferedFootnoteLedger();
+  void releaseFootnoteLedger(FootnoteLedger& parked);
+  // Lingua (SideBySide / Interlinear) pairing builders; defined under src/modules/lingua.
+  void makePagesTableMode();
+  void flushBufferedOriginal();
+  void renderSideBySide(std::unique_ptr<ParsedText> sourceBlock, std::unique_ptr<ParsedText> transBlock);
+  void appendSideBySideNoTranslationMarkerIfUnpaired();
+  void makePagesInterlinearMode();
+  void renderInterlinear(std::unique_ptr<ParsedText> origBlock, std::unique_ptr<ParsedText> transBlock);
+  struct InterlinearRun {
+    std::shared_ptr<TextBlock> row;  // null is legal: the strip is reserved and nothing is drawn
+    int16_t x = 0;                   // EXTRA offset added to the block's left inset at placement
+    int16_t rightEdge = 0;           // right edge of this run's ink, measure-relative
+    uint16_t slot = 0;               // which of the sentence's source lines this row belongs over
+  };
+  struct InterlinearBands {
+    const std::vector<std::shared_ptr<TextBlock>>* srcLines = nullptr;
+    size_t firstLine = 0;
+    size_t slots = 0;
+    int16_t headX = 0;
+    int16_t tailX = 0;
+    int16_t floorX = 0;
+  };
+  void buildAnnotationRuns(const InterlinearAnnotation& annotation, const ParsedText& transBlock,
+                           const InterlinearBands& bands, uint16_t measureWidth, int annotationFont,
+                           std::vector<InterlinearRun>& runs, ParsedText& stream);
+  void placeInterlinearRow(const std::shared_ptr<TextBlock>& row, int16_t xPos, int16_t yPos, LineFontRole role);
+  void emitInterlinearPair(const std::vector<InterlinearRun>& runs, const std::shared_ptr<TextBlock>& srcLine,
+                           int stripHeight, int srcRowHeight, int16_t leftInset, uint32_t sourceOffset);
+  // Lingua: line advance for a font, with the reader's line compression applied.
+  int linguaLineHeight(int lineFontId) const;
+  // Lingua: route a flushed block through the pairing builder that owns the active layout.
+  void makePagesForLayout();
   void flushLongTextRunIfNeeded(bool force = false);
   size_t bufferedWordsBeforeLayoutLimit() const;
   uint16_t textRunBytesBeforeLayoutLimit() const;
@@ -351,7 +443,24 @@ class ChapterHtmlSlimParser {
   void abortParse();   // tear down without flushing (error / abandon)
   void releaseInputFile();
 
-  void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleOffset, uint32_t referenceOffset);
+  // Lingua: configure the translation layout before beginParse(). `bookPrimaryLang` is the book's
+  // content.opf language; a block whose lang= differs is a translated block.
+  void configureLingua(LinguaLayout layout, const std::string& primaryLang, int translationFont, int annotationFont,
+                       InterlinearPairFn pairFn) {
+    linguaLayout = layout;
+    bookPrimaryLang = primaryLang;
+    translationFontId = translationFont;
+    annotationFontId = annotationFont;
+    interlinearPairFn = pairFn;
+  }
+
+  // `role` is the role the caller MEASURED this line with: it decides both the vertical advance and
+  // the byte stamped on the emitted PageLine.
+  void addLineToPage(std::shared_ptr<TextBlock> line, LineFontRole role, uint32_t visibleOffset,
+                     uint32_t referenceOffset);
+  void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleOffset, uint32_t referenceOffset) {
+    addLineToPage(std::move(line), LineFontRole::Body, visibleOffset, referenceOffset);
+  }
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
   bool wasLowMemoryFallbackTriggered() const { return lowMemoryImageFallback; }
   bool wasLowMemoryAbortTriggered() const { return lowMemoryAbort; }
