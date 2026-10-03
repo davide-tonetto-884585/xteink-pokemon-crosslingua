@@ -6,8 +6,10 @@ namespace {
 constexpr uint32_t DEFAULT_RATE_LIMIT_BACKOFF_MS[] = {1500};
 constexpr uint32_t EDGE_RATE_LIMIT_BACKOFF_MS[] = {5000, 15000, 30000, 60000};
 
+// 3 attempts: a single transient failure (Wi-Fi hiccup, TLS handshake) used to leave the paragraph
+// untranslated after only one retry.
 constexpr TranslationEnginePolicy DEFAULT_POLICY = {
-    TranslationBatchMode::None, 1500, 1800, 2, 3, DEFAULT_RATE_LIMIT_BACKOFF_MS, 1,
+    TranslationBatchMode::None, 1500, 1800, 3, 3, DEFAULT_RATE_LIMIT_BACKOFF_MS, 1,
 };
 
 constexpr TranslationEnginePolicy SEPARATOR_BATCH_POLICY = {

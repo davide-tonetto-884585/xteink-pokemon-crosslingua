@@ -34,12 +34,23 @@ class TranslationHtmlRewriter {
     // a generic failure, while reusing the identical abort/partial-preservation
     // path (abortedOnErrors stays true).
     bool abortedLowMemory = false;
+    int alreadyTranslated = 0;  // fill-missing mode: originals that already had a translation
     char errorDetail[64] = {};  // last error message when abortedOnErrors
   };
 
   // Count translatable block elements in a file without translating.
   // Used for progress bar total.
   static int countBlocksInFile(const std::string& inputPath);
+
+  // "Fill missing" mode: the input is an already-translated chapter. Existing translation blocks
+  // (lang=) are kept verbatim and only the original paragraphs WITHOUT a translation right after
+  // them are sent to the engine. Must be set before rewrite*/; stays set for the instance.
+  void setFillMissingMode(bool on) { keepExistingTranslations = on; }
+  // Optional live counters (updated from the worker task during the run) for the progress UI.
+  void setLiveCounters(volatile int* translated, volatile int* failed) {
+    liveTranslated = translated;
+    liveFailed = failed;
+  }
 
   // "Does this chapter HTML already contain translations?" lives in
   // "modules/lingua/services/TranslatedContentDetector.h" (lingua::content::htmlHasTranslatedBlock). It used to be
@@ -100,6 +111,19 @@ class TranslationHtmlRewriter {
   std::string blockClass;    // class attribute of current block
 
   int skipBlockDepth = -1;  // depth of a block being skipped (existing translation)
+  bool blockIsDiv = false;  // current tracked block is a <div>: abandoned if a nested block opens
+  bool keepExistingTranslations = false;  // fill-missing mode (see setFillMissingMode)
+  bool flushDue = false;  // batch reached its target size; flushed when the NEXT block opens
+  int alreadyTranslated = 0;
+  volatile int* liveTranslated = nullptr;
+  volatile int* liveFailed = nullptr;
+  // A paragraph longer than the engine's per-request limit is translated in sentence-bounded
+  // chunks (translateText); beyond this it is left untranslated to bound RAM.
+  static constexpr size_t MAX_BLOCK_TEXT_BYTES = 12000;
+  bool translateWithRetry(const std::string& text, std::string& out);
+  bool translateText(const std::string& text, std::string& out);
+  void resetRunState();
+  void publishLiveCounters(int pendingOk = 0);
 
   int paragraphsTranslated = 0;
   int paragraphsSkipped = 0;
@@ -180,4 +204,5 @@ class TranslationHtmlRewriter {
 
   // Counting-only callbacks (for countBlocksInFile)
   static void XMLCALL onStartCount(void* ud, const XML_Char* name, const XML_Char** atts);
+  static void XMLCALL onEndCount(void* ud, const XML_Char* name);
 };

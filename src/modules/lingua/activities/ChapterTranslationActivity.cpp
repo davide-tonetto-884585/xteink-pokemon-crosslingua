@@ -16,6 +16,7 @@
 #include "activities/ActivityResult.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "modules/lingua/ui/LinguaTouch.h"
+#include "modules/lingua/ui/TranslationProgressUi.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "modules/lingua/LinguaModeCatalog.h"
@@ -63,14 +64,75 @@ void ChapterTranslationActivity::onEnter() {
     return;
   }
 
-  // If the chapter is already translated, show confirmation before proceeding.
+  resolveChapterInfo();
+
+  // If the chapter is already translated, offer "missing only" (default) or "everything".
   if (alreadyTranslated) {
     state = CONFIRM_RETRANSLATE;
+    optionSelection = 0;
     requestUpdate();
     return;
   }
 
   launchSourcePicker();
+}
+
+void ChapterTranslationActivity::resolveChapterInfo() {
+  if (!epub) return;
+  bookTitle = epub->getTitle();
+  char buf[48];
+  snprintf(buf, sizeof(buf), tr(STR_CHAPTER_X_OF_Y), spineIndex + 1, epub->getSpineItemsCount());
+  chapterInfo = buf;
+  const int tocIndex = epub->getTocIndexForSpineIndex(spineIndex);
+  if (tocIndex >= 0) {
+    const auto toc = epub->getTocItem(tocIndex);
+    if (!toc.title.empty()) {
+      chapterInfo += " - ";
+      chapterInfo += toc.title;
+    }
+  }
+}
+
+void ChapterTranslationActivity::activateOption(const int index) {
+  if (state == CONFIRM_RETRANSLATE) {
+    fillMissingMode = index == 0;
+    if (fillMissingMode) {
+      // Same languages as the existing translation: reuse the stored choice when there is one.
+      const uint8_t target = SETTINGS.translationLanguage;
+      if (target < LanguagePickerActivity::NUM_LANGUAGES) {
+        const uint8_t source = SETTINGS.sourceTranslationLanguage;
+        if (source < LanguagePickerActivity::NUM_LANGUAGES) {
+          sourceLangCode = LanguagePickerActivity::LANGUAGES[source].code;
+          sourceLangName = LanguagePickerActivity::LANGUAGES[source].name;
+        } else {
+          sourceLangCode = "auto";
+          sourceLangName = tr(STR_AUTO_DETECT);
+        }
+        targetLangCode = LanguagePickerActivity::LANGUAGES[target].code;
+        targetLangName = LanguagePickerActivity::LANGUAGES[target].name;
+        launchWifiOrStart();
+        return;
+      }
+    }
+    launchSourcePicker();
+    return;
+  }
+  if (state == DONE) {
+    if (missingCount() > 0 && index == 0) {
+      // Retry: run again over the bilingual HTML just written, translating only what is missing.
+      fillMissingMode = true;
+      launchWifiOrStart();
+      return;
+    }
+    if (lastResult.paragraphsTranslated > 0 || lastResult.alreadyTranslated > 0) {
+      // Offer the display-mode chooser so a bilingual mode can be enabled straight away.
+      displayModeChooser.begin(static_cast<int>(linguaSelectableIndex(SETTINGS.translationDisplayMode)));
+      state = CHOOSE_DISPLAY_MODE;
+      requestUpdate();
+      return;
+    }
+    returnToCaller();
+  }
 }
 
 void ChapterTranslationActivity::onExit() {
@@ -221,6 +283,10 @@ void ChapterTranslationActivity::startTranslation() {
   lastResult = {};
   progressCurrent = 0;
   progressTotal = 0;
+  liveTranslated = 0;
+  liveFailed = 0;
+  runStartMillis = millis();
+  runEndMillis = 0;
   lastProgressUpdate = 0;
   boundaryPending = false;
   boundaryAck = false;
@@ -335,24 +401,31 @@ void ChapterTranslationActivity::runTranslation() {
     return;
   }
 
-  // Step 1: extract this chapter's HTML out of the EPUB zip into a scratch file.
+  // Step 1: extract this chapter's HTML out of the EPUB zip into a scratch file. In fill-missing
+  // mode the input is the existing bilingual HTML itself (read-only; output goes to ".part").
   const auto& spineItem = epub->getSpineItem(spineIndex);
-  const auto tmpPath = epub->getCachePath() + "/.tmp_translate_" + std::to_string(spineIndex) + ".html";
+  const auto tmpPath = fillMissingMode
+                           ? translatedHtmlPath
+                           : epub->getCachePath() + "/.tmp_translate_" + std::to_string(spineIndex) + ".html";
 
   HalFile tmpFile;
-  if (!Storage.openFileForWrite("CHT", tmpPath, tmpFile)) {
+  if (fillMissingMode) {
+    // Nothing to extract.
+  } else if (!Storage.openFileForWrite("CHT", tmpPath, tmpFile)) {
     snprintf(statusMsg, sizeof(statusMsg), "Failed to create temp file");
     taskFailed = true;
     return;
   }
-  if (!epub->readItemContentsToStream(spineItem.href, tmpFile, 1024)) {
-    tmpFile.close();
-    Storage.remove(tmpPath.c_str());
-    snprintf(statusMsg, sizeof(statusMsg), "Failed to extract chapter");
-    taskFailed = true;
-    return;
+  if (!fillMissingMode) {
+    if (!epub->readItemContentsToStream(spineItem.href, tmpFile, 1024)) {
+      tmpFile.close();
+      Storage.remove(tmpPath.c_str());
+      snprintf(statusMsg, sizeof(statusMsg), "Failed to extract chapter");
+      taskFailed = true;
+      return;
+    }
+    tmpFile.close();  // Must close before re-opening the same path for read in step 2.
   }
-  tmpFile.close();  // Must close before re-opening the same path for read in step 2.
 
   // Step 2: pre-scan for the progress-bar denominator. countBlocksInFile is a
   // pure SAX pass with no translation work and is cheap relative to step 3.
@@ -375,7 +448,7 @@ void ChapterTranslationActivity::runTranslation() {
 
   HalFile outFile;
   if (!Storage.openFileForWrite("CHT", partPath, outFile)) {
-    Storage.remove(tmpPath.c_str());
+    if (!fillMissingMode) Storage.remove(tmpPath.c_str());
     snprintf(statusMsg, sizeof(statusMsg), "Failed to create output file");
     taskFailed = true;
     return;
@@ -385,12 +458,14 @@ void ChapterTranslationActivity::runTranslation() {
   LOG_DBG("CHT", "Using source=%s, target=%s", srcLang, targetLangCode.c_str());
 
   TranslationHtmlRewriter rewriter;
+  rewriter.setFillMissingMode(fillMissingMode);
+  rewriter.setLiveCounters(&liveTranslated, &liveFailed);
   lastResult = rewriter.rewriteFromFile(tmpPath, outFile, srcLang, targetLangCode.c_str(), SETTINGS.translationEngine,
                                         SETTINGS.translateApiKey, &cancelFlag, &progressCurrent,
                                         &ChapterTranslationActivity::batchBoundaryTrampoline, this);
   outFile.close();  // Flush and release before the rename/delete dance below.
 
-  Storage.remove(tmpPath.c_str());
+  if (!fillMissingMode) Storage.remove(tmpPath.c_str());
 
   if (cancelFlag || lastResult.cancelled) {
     // Partial output is unusable — section loader would render half-translated
@@ -420,6 +495,13 @@ void ChapterTranslationActivity::runTranslation() {
   // chapter actually had translatable content that failed. A cover / image-only /
   // fully-already-translated chapter legitimately translates nothing — that passthrough
   // output is a valid result and is committed like any other.
+  if (fillMissingMode && lastResult.paragraphsTranslated == 0) {
+    // Nothing new: keep the existing bilingual file untouched and report on the summary screen
+    // (which offers another retry when paragraphs are still missing).
+    Storage.remove(partPath.c_str());
+    taskDone = true;
+    return;
+  }
   if (lastResult.paragraphsTranslated == 0 && (lastResult.translateFailures > 0 || lastResult.abortedOnErrors)) {
     Storage.remove(partPath.c_str());
     snprintf(statusMsg, sizeof(statusMsg), "No paragraphs translated");
@@ -438,8 +520,9 @@ void ChapterTranslationActivity::runTranslation() {
     return;
   }
 
-  LOG_DBG("CHT", "Translation done: %d translated, %d skipped, %d failed", lastResult.paragraphsTranslated,
-          lastResult.paragraphsSkipped, lastResult.translateFailures);
+  LOG_DBG("CHT", "Translation done: %d translated, %d skipped, %d failed, %d already translated%s",
+          lastResult.paragraphsTranslated, lastResult.paragraphsSkipped, lastResult.translateFailures,
+          lastResult.alreadyTranslated, fillMissingMode ? " (missing only)" : "");
   taskDone = true;
 }
 
@@ -512,12 +595,35 @@ const char* ChapterTranslationActivity::getEngineName() const {
 
 void ChapterTranslationActivity::loop() {
   // Touch fallback (X4 Pro): bottom strip = Back, elsewhere = Confirm. Read once per pass.
-  const LinguaTouch::Tap tap = (state == CHOOSE_DISPLAY_MODE) ? LinguaTouch::Tap::None
-                                                              : LinguaTouch::readTap(mappedInput, renderer);
-  // CONFIRM_RETRANSLATE: confirm = re-translate, back = cancel.
-  if (state == CONFIRM_RETRANSLATE) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || tap == LinguaTouch::Tap::Confirm) {
-      launchSourcePicker();
+  int tapX = 0;
+  int tapY = 0;
+  const LinguaTouch::Tap tap = (state == CHOOSE_DISPLAY_MODE)
+                                   ? LinguaTouch::Tap::None
+                                   : LinguaTouch::readTap(mappedInput, renderer, &tapX, &tapY);
+  // Option screens (CONFIRM_RETRANSLATE, DONE summary): Up/Down/Left/Right move the selection,
+  // Confirm or a tap on an option activates it, Back / the bottom strip leaves.
+  if (state == CONFIRM_RETRANSLATE || state == DONE) {
+    if (optionCount > 1 && (mappedInput.wasReleased(MappedInputManager::Button::Up) ||
+                            mappedInput.wasReleased(MappedInputManager::Button::Down) ||
+                            mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+                            mappedInput.wasReleased(MappedInputManager::Button::Right) ||
+                            mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+                            mappedInput.wasReleased(MappedInputManager::Button::PageForward))) {
+      optionSelection = (optionSelection + 1) % optionCount;
+      requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      activateOption(optionSelection);
+      return;
+    }
+    if (tap == LinguaTouch::Tap::Confirm) {
+      for (int i = 0; i < optionCount; i++) {
+        if (TranslationProgressUi::rectContains(optionRects[i], tapX, tapY)) {
+          activateOption(i);
+          return;
+        }
+      }
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) || tap == LinguaTouch::Tap::Back) {
@@ -551,20 +657,19 @@ void ChapterTranslationActivity::loop() {
 
     if (taskDone) {
       restoreFramebuffer();  // bring the buffer back BEFORE the result screen draws
+      runEndMillis = millis();
       if (cancelFlag || lastResult.cancelled) {
         state = CANCELLED;
-      } else if (lastResult.paragraphsTranslated > 0) {
-        // Success with real content: offer the display-mode chooser so the user can enable a
-        // bilingual mode straight away (a passthrough chapter that translated nothing keeps
-        // the plain DONE screen). Pre-highlight the current mode.
-        displayModeChooser.begin(static_cast<int>(linguaSelectableIndex(SETTINGS.translationDisplayMode)));
-        state = CHOOSE_DISPLAY_MODE;
       } else {
+        // Summary first (counts, time, and a retry when paragraphs are missing); Continue then
+        // offers the display-mode chooser when something was translated.
         state = DONE;
+        optionSelection = 0;
       }
       requestUpdate();
     } else if (taskFailed) {
       restoreFramebuffer();
+      runEndMillis = millis();
       state = FAILED;
       requestUpdate();
     } else {
@@ -609,7 +714,7 @@ void ChapterTranslationActivity::loop() {
 
   // Result screens: any of Confirm/Back leaves. The reader was torn down before this
   // activity launched, so we relaunch it from disk (it re-reads translation state).
-  if (state == DONE || state == FAILED || state == CANCELLED) {
+  if (state == FAILED || state == CANCELLED) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
         mappedInput.wasReleased(MappedInputManager::Button::Back) || tap != LinguaTouch::Tap::None) {
       returnToCaller();
@@ -624,118 +729,140 @@ void ChapterTranslationActivity::loop() {
   }
 }
 
+int ChapterTranslationActivity::drawInfoBlock(int y) {
+  namespace ui = TranslationProgressUi;
+  y = ui::drawLine(renderer, y, bookTitle.c_str(), UI_12_FONT_ID, /*bold=*/true);
+  y = ui::drawLine(renderer, y, chapterInfo.c_str(), UI_10_FONT_ID);
+  if (!targetLangName.empty()) {
+    // "Source -> Target" uses ASCII to avoid font-coverage gaps; language names are English.
+    std::string langLine = sourceLangName + " -> " + targetLangName + "  -  " + getEngineName();
+    y = ui::drawLine(renderer, y, langLine.c_str(), UI_10_FONT_ID);
+  }
+  if (fillMissingMode) y = ui::drawLine(renderer, y, tr(STR_TRANSLATION_FILL_MODE), UI_10_FONT_ID);
+  return ui::drawSeparator(renderer, y + 4);
+}
+
 void ChapterTranslationActivity::render(RenderLock&&) {
+  namespace ui = TranslationProgressUi;
   // Backstop for the loop()-level suppression: while the framebuffer is freed for the
   // network run there is nothing to draw on (drawing would be a use-after-free). The
   // panel retains the last flushed "Translating..." image until restore.
   if (!renderer.hasFrameBuffer()) return;
 
   // The chooser owns a different, list-based layout via the UITheme components, so it draws
-  // and flushes itself rather than sharing the raw-coordinate result-screen chrome below.
+  // and flushes itself rather than sharing the result-screen chrome below.
   if (state == CHOOSE_DISPLAY_MODE) {
     renderDisplayModeChooser();
     return;
   }
 
   renderer.clearScreen();
-  const int pageWidth = renderer.getScreenWidth();
-
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, tr(STR_TRANSLATE_CHAPTER), true, EpdFontFamily::BOLD);
+  int y = ui::drawHeader(renderer, tr(STR_TRANSLATE_CHAPTER));
+  optionCount = 0;
+  char line[96];
 
   if (state == CONFIRM_RETRANSLATE) {
-    renderer.drawCenteredText(UI_12_FONT_ID, 150, tr(STR_CHAPTER_ALREADY_TRANSLATED), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, 200, tr(STR_RETRANSLATE_CONFIRM));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    y = drawInfoBlock(y);
+    y = ui::drawLine(renderer, y, tr(STR_CHAPTER_ALREADY_TRANSLATED), UI_12_FONT_ID, /*bold=*/true);
+    y += 10;
+    const char* labels[2] = {tr(STR_TRANSLATE_MISSING_ONLY), tr(STR_RETRANSLATE_ALL)};
+    optionCount = 2;
+    ui::drawButtons(renderer, y, labels, optionCount, optionSelection, optionRects);
+    const auto hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, hints.btn1, hints.btn2, hints.btn3, hints.btn4);
 
   } else if (state == TRANSLATING) {
-    // "Source -> Target" arrow uses ASCII to avoid font-coverage gaps; the
-    // language picker stores names in English (see LanguagePickerActivity.cpp).
-    if (!targetLangName.empty()) {
-      std::string langLine = sourceLangName + " -> " + targetLangName;
-      renderer.drawCenteredText(UI_10_FONT_ID, 50, langLine.c_str());
-    }
-
-    char engineLine[80];
-    snprintf(engineLine, sizeof(engineLine), tr(STR_ENGINE_LABEL_FORMAT), getEngineName());
-    renderer.drawCenteredText(UI_10_FONT_ID, 80, engineLine);
-
-    renderer.drawCenteredText(UI_10_FONT_ID, 130, tr(STR_TRANSLATING_CHAPTER));
-
-    // Atomic-ish snapshot: copy volatile counters into locals so a worker write
-    // mid-render cannot reshape the progress bar within a single frame.
+    y = drawInfoBlock(y);
+    // Snapshot the worker-written counters so one frame is self-consistent.
     const int total = progressTotal;
-    const int current = progressCurrent;
+    const int current = progressCurrent > total && total > 0 ? total : progressCurrent;
+    const int translated = liveTranslated;
+    const int failed = liveFailed;
+    y = ui::drawLine(renderer, y, tr(STR_TRANSLATING_CHAPTER), UI_10_FONT_ID);
+    y = ui::drawProgress(renderer, y + 6, current, total);
     if (total > 0) {
-      char progressStr[32];
-      snprintf(progressStr, sizeof(progressStr), "%d / %d", current, total);
-      renderer.drawCenteredText(UI_12_FONT_ID, 180, progressStr, true, EpdFontFamily::BOLD);
-
-      const int barX = 90;
-      const int barY = 220;
-      const int barW = pageWidth - 180;
-      const int barH = 12;
-      renderer.drawRect(barX, barY, barW, barH, true);
-      if (current > 0) {
-        int fillW = (barW - 2) * current / total;
-        if (fillW > barW - 2) fillW = barW - 2;
-        if (fillW > 0) {
-          renderer.fillRect(barX + 1, barY + 1, fillW, barH - 2, true);
-        }
-      }
+      snprintf(line, sizeof(line), tr(STR_TRANSLATION_PARAGRAPHS_FORMAT), current, total);
+      y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
     }
+    snprintf(line, sizeof(line), tr(STR_TRANSLATION_COUNTS_FORMAT), translated, failed);
+    y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
+    const unsigned long elapsed = millis() - runStartMillis;
+    if (current > 0 && total > current) {
+      const unsigned long remaining =
+          static_cast<unsigned long>((static_cast<uint64_t>(elapsed) * (total - current)) / current);
+      snprintf(line, sizeof(line), tr(STR_TRANSLATION_TIME_FORMAT), ui::formatDuration(elapsed).c_str(),
+               ui::formatDuration(remaining).c_str());
+    } else {
+      snprintf(line, sizeof(line), tr(STR_TRANSLATION_ELAPSED_FORMAT), ui::formatDuration(elapsed).c_str());
+    }
+    ui::drawLine(renderer, y, line, UI_10_FONT_ID);
 
-    renderer.drawCenteredText(UI_10_FONT_ID, 380, tr(STR_BACK_TO_CANCEL));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    const char* cancelHint = mappedInput.hasTouch() ? tr(STR_TAP_BOTTOM_TO_CANCEL) : tr(STR_BACK_TO_CANCEL);
+    const auto hints = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+    GUI.drawButtonHints(renderer, hints.btn1, hints.btn2, hints.btn3, hints.btn4);
+    const int h = renderer.getScreenHeight();
+    renderer.drawCenteredText(UI_10_FONT_ID, h - (h * LinguaTouch::BACK_ZONE_PERCENT) / 100 - 30, cancelHint);
 
   } else if (state == DONE) {
-    if (!targetLangName.empty()) {
-      std::string langLine = sourceLangName + " -> " + targetLangName;
-      renderer.drawCenteredText(UI_10_FONT_ID, 50, langLine.c_str());
+    y = drawInfoBlock(y);
+    y = ui::drawLine(renderer, y, tr(STR_TRANSLATION_DONE), UI_12_FONT_ID, /*bold=*/true);
+    y += 4;
+    snprintf(line, sizeof(line), tr(STR_TRANSLATION_COUNTS_FORMAT), lastResult.paragraphsTranslated,
+             lastResult.translateFailures);
+    y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
+    if (lastResult.alreadyTranslated > 0) {
+      snprintf(line, sizeof(line), tr(STR_TRANSLATION_ALREADY_FORMAT), lastResult.alreadyTranslated);
+      y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
     }
+    // paragraphsSkipped also counts the failures; the rest stayed original on purpose (the
+    // engine returned them unchanged, e.g. names or numbers).
+    const int unchanged = lastResult.paragraphsSkipped - lastResult.translateFailures;
+    if (unchanged > 0) {
+      snprintf(line, sizeof(line), tr(STR_TRANSLATION_UNCHANGED_FORMAT), unchanged);
+      y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
+    }
+    const unsigned long elapsed = (runEndMillis ? runEndMillis : millis()) - runStartMillis;
+    snprintf(line, sizeof(line), tr(STR_TRANSLATION_FINISHED_IN_FORMAT), ui::formatDuration(elapsed).c_str());
+    y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
+    if (missingCount() > 0) y = ui::drawWrapped(renderer, y + 6, tr(STR_TRANSLATION_MISSING_HINT), UI_10_FONT_ID);
+    y += 10;
 
-    renderer.drawCenteredText(UI_12_FONT_ID, 150, tr(STR_TRANSLATION_DONE), true, EpdFontFamily::BOLD);
-
-    char doneStr[64];
-    const int translated = lastResult.paragraphsTranslated;
-    const int total = translated + lastResult.paragraphsSkipped;
-    snprintf(doneStr, sizeof(doneStr), "%d / %d paragraphs", translated, total);
-    renderer.drawCenteredText(UI_10_FONT_ID, 200, doneStr);
-
-    renderer.drawCenteredText(UI_10_FONT_ID, 380, tr(STR_PRESS_ANY_CONTINUE));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    char retryLabel[48];
+    snprintf(retryLabel, sizeof(retryLabel), tr(STR_RETRY_MISSING_FORMAT), missingCount());
+    const char* labels[2] = {retryLabel, tr(STR_CONTINUE)};
+    if (missingCount() > 0) {
+      optionCount = 2;
+      ui::drawButtons(renderer, y, labels, optionCount, optionSelection, optionRects);
+    } else {
+      optionCount = 1;
+      ui::drawButtons(renderer, y, labels + 1, optionCount, 0, optionRects);
+    }
+    const auto hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, hints.btn1, hints.btn2, hints.btn3, hints.btn4);
 
   } else if (state == FAILED) {
-    renderer.drawCenteredText(UI_12_FONT_ID, 150, tr(STR_TRANSLATION_FAILED), true, EpdFontFamily::BOLD);
+    y = drawInfoBlock(y);
+    y = ui::drawLine(renderer, y, tr(STR_TRANSLATION_FAILED), UI_12_FONT_ID, /*bold=*/true);
     if (lowMemoryAbort) {
-      // Long translated message -> wrap across the content width (statusMsg's
-      // 64-byte buffer can't hold the Ukrainian text, so it is bypassed here).
-      const auto lines = renderer.wrappedText(UI_10_FONT_ID, tr(STR_TRANSLATION_LOW_MEMORY), pageWidth - 80, 4);
-      const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
-      int y = 200;
-      for (const auto& line : lines) {
-        renderer.drawCenteredText(UI_10_FONT_ID, y, line.c_str());
-        y += lineH;
-      }
+      // Long translated message -> wrapped (statusMsg's 64-byte buffer can't hold it).
+      y = ui::drawWrapped(renderer, y + 6, tr(STR_TRANSLATION_LOW_MEMORY), UI_10_FONT_ID, 4);
     } else if (statusMsg[0]) {
-      renderer.drawCenteredText(UI_10_FONT_ID, 200, statusMsg);
+      y = ui::drawWrapped(renderer, y + 6, statusMsg, UI_10_FONT_ID);
     }
-    renderer.drawCenteredText(UI_10_FONT_ID, 380, tr(STR_PRESS_ANY_CONTINUE));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    if (runStartMillis) {
+      snprintf(line, sizeof(line), tr(STR_TRANSLATION_COUNTS_FORMAT), (int)liveTranslated, (int)liveFailed);
+      ui::drawLine(renderer, y + 6, line, UI_10_FONT_ID);
+    }
+    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() * 2 / 3, tr(STR_PRESS_ANY_CONTINUE));
+    const auto hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), "", "");
+    GUI.drawButtonHints(renderer, hints.btn1, hints.btn2, hints.btn3, hints.btn4);
 
   } else if (state == CANCELLED) {
-    renderer.drawCenteredText(UI_12_FONT_ID, 150, tr(STR_TRANSLATION_CANCELLED), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, 380, tr(STR_PRESS_ANY_CONTINUE));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    y = drawInfoBlock(y);
+    ui::drawLine(renderer, y, tr(STR_TRANSLATION_CANCELLED), UI_12_FONT_ID, /*bold=*/true);
+    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() * 2 / 3, tr(STR_PRESS_ANY_CONTINUE));
+    const auto hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK_BUTTON), "", "");
+    GUI.drawButtonHints(renderer, hints.btn1, hints.btn2, hints.btn3, hints.btn4);
   }
 
   renderer.displayBuffer();

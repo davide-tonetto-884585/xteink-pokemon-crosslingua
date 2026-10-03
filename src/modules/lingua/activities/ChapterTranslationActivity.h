@@ -7,6 +7,7 @@
 #include <string>
 
 #include "activities/Activity.h"
+#include "components/themes/BaseTheme.h"
 #include "modules/lingua/activities/TranslationReturnTarget.h"
 #include "modules/lingua/parsers/TranslationHtmlRewriter.h"
 #include "modules/lingua/ui/LinguaModeChooser.h"
@@ -80,6 +81,27 @@ class ChapterTranslationActivity final : public Activity {
   std::string targetLangName;
 
   State state = SOURCE_LANG_SELECTION;
+
+  // "Translate missing only": re-run over the existing bilingual HTML, keeping its translations and
+  // sending only the originals that have none (failed requests, too-long paragraphs, ...).
+  bool fillMissingMode = false;
+  // Option cursor on CONFIRM_RETRANSLATE (0 = missing only, 1 = everything) and on the DONE summary.
+  int optionSelection = 0;
+  Rect optionRects[2];
+  int optionCount = 0;
+  // Book / chapter info for the progress screen, resolved once from the lean Epub.
+  std::string bookTitle;
+  std::string chapterInfo;
+  // Live counters written by the rewriter on the worker task.
+  volatile int liveTranslated = 0;
+  volatile int liveFailed = 0;
+  unsigned long runStartMillis = 0;
+  unsigned long runEndMillis = 0;
+
+  void resolveChapterInfo();
+  void activateOption(int index);
+  int drawInfoBlock(int y);
+  int missingCount() const { return lastResult.translateFailures; }
 
   // Cursor into the CHOOSE_DISPLAY_MODE list: an index into LINGUA_SELECTABLE_MODES
   // (0..LINGUA_SELECTABLE_MODE_COUNT-1), NOT a raw mode value -- the retired holes at 1/2 make the

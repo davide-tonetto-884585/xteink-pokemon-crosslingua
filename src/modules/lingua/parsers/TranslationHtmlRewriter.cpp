@@ -12,7 +12,10 @@
 
 static constexpr size_t PARSE_CHUNK = 1024;
 
-const char* TranslationHtmlRewriter::BLOCK_TAGS[] = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote"};
+// "div"/"dd"/"dt" are paragraph blocks only when they hold text directly: a div that turns out to wrap
+// other blocks is abandoned as soon as the first nested block opens (see onStart).
+const char* TranslationHtmlRewriter::BLOCK_TAGS[] = {"p",  "h1", "h2", "h3",         "h4", "h5",
+                                                     "h6", "li", "blockquote", "div", "dd", "dt"};
 const int TranslationHtmlRewriter::NUM_BLOCK_TAGS = static_cast<int>(sizeof(BLOCK_TAGS) / sizeof(BLOCK_TAGS[0]));
 
 bool TranslationHtmlRewriter::isBlockTag(const char* name) {
@@ -193,7 +196,7 @@ void TranslationHtmlRewriter::flushBlock(const char* endTagName) {
   entry.blockTagName = blockTagName;
   entry.blockClass = std::move(blockClass);
   pendingHtml.clear();
-  if (!trimmed.empty() && trimmed.size() <= ParagraphTranslator::MAX_TEXT_BYTES) {
+  if (!trimmed.empty() && trimmed.size() <= MAX_BLOCK_TEXT_BYTES) {
     entry.trimmedText = trimmed;
     batchTextBytes += trimmed.size();
   }
@@ -202,14 +205,91 @@ void TranslationHtmlRewriter::flushBlock(const char* endTagName) {
   LOG_DBG("HtmlRW", "Block <%s> text=%u bytes, batch=%u entries, batchBytes=%u", endTagName, (unsigned)blockText.size(),
           (unsigned)batch.size(), (unsigned)batchTextBytes);
 
-  // Flush batch if we've accumulated enough text
+  // Batch full: flush when the NEXT block opens rather than now, so that in fill-missing mode an
+  // existing translation that immediately follows this block can still mark it as translated.
   if (batchTextBytes >= enginePolicy->batchTargetBytes) {
-    flushBatch();
+    flushDue = true;
   }
 
   blockHtml.clear();
   blockText.clear();
   blockDepth = -1;
+}
+
+void TranslationHtmlRewriter::resetRunState() {
+  blockIsDiv = false;
+  flushDue = false;
+  alreadyTranslated = 0;
+  publishLiveCounters();
+}
+
+void TranslationHtmlRewriter::publishLiveCounters(const int pendingOk) {
+  if (liveTranslated) *liveTranslated = paragraphsTranslated + pendingOk;
+  if (liveFailed) *liveFailed = translateFailures;
+}
+
+bool TranslationHtmlRewriter::translateWithRetry(const std::string& text, std::string& out) {
+  bool ok = false;
+  for (int attempt = 0; attempt < enginePolicy->maxAttempts && !ok; attempt++) {
+    if (attempt > 0) delay(enginePolicy->retryDelayMs(HttpDownloader::lastHttpCode, attempt - 1));
+    ok = ParagraphTranslator::translate(text, sourceLang, targetLang, engine, apiKey, out, &lastError, httpSession);
+    if (ok) {
+      consecutive429 = 0;
+    } else if (!shouldRetryAfterFailure(HttpDownloader::lastHttpCode)) {
+      break;
+    }
+  }
+  return ok;
+}
+
+bool TranslationHtmlRewriter::translateText(const std::string& text, std::string& out) {
+  constexpr size_t LIMIT = ParagraphTranslator::MAX_TEXT_BYTES;
+  if (text.size() <= LIMIT) return translateWithRetry(text, out);
+
+  // Paragraph longer than one request allows: translate it in chunks cut at sentence ends (or, if a
+  // single sentence is too long, at a space / UTF-8 boundary) and join the pieces with a space.
+  out.clear();
+  size_t start = 0;
+  while (start < text.size()) {
+    size_t end = text.size();
+    if (end - start > LIMIT) {
+      const size_t hardEnd = start + LIMIT;
+      size_t cut = std::string::npos;
+      for (size_t i = hardEnd; i > start + LIMIT / 3; i--) {
+        const char c = text[i - 1];
+        if ((c == '.' || c == '!' || c == '?' || c == ';' || c == '\n') && (i >= text.size() || text[i] == ' ' || text[i] == '\n')) {
+          cut = i;
+          break;
+        }
+      }
+      if (cut == std::string::npos) {
+        for (size_t i = hardEnd; i > start; i--) {
+          if (text[i - 1] == ' ') {
+            cut = i;
+            break;
+          }
+        }
+      }
+      if (cut == std::string::npos) {
+        cut = hardEnd;
+        while (cut > start && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) cut--;  // UTF-8 boundary
+      }
+      end = cut;
+    }
+    std::string piece = text.substr(start, end - start);
+    const size_t s0 = piece.find_first_not_of(" \n");
+    if (s0 != std::string::npos) {
+      std::string translated;
+      if (!translateWithRetry(piece.substr(s0), translated)) return false;
+      if (!out.empty()) out += ' ';
+      out += translated;
+      if (cancelled && *cancelled) return false;
+      delay(100);
+    }
+    start = end;
+  }
+  LOG_DBG("HtmlRW", "Long paragraph (%u bytes) translated in chunks", static_cast<unsigned>(text.size()));
+  return !out.empty();
 }
 
 void TranslationHtmlRewriter::flushBatch() {
@@ -329,20 +409,12 @@ void TranslationHtmlRewriter::flushBatch() {
       // Individual calls — either engine doesn't support batch merging, or merged text too large
       LOG_DBG("HtmlRW", "Individual calls: %u paragraphs (canBatch=%d, mergedBytes=%u)",
               (unsigned)translatableIndices.size(), canBatchMerge, (unsigned)mergedText.size());
+      int individualOk = 0;
       for (size_t i = 0; i < translatableIndices.size(); i++) {
         if (wasCancelled || abortedOnErrors || (cancelled && *cancelled)) break;
         std::string translated;
-        bool ok = false;
-        for (int attempt = 0; attempt < enginePolicy->maxAttempts && !ok; attempt++) {
-          if (attempt > 0) delay(enginePolicy->retryDelayMs(HttpDownloader::lastHttpCode, attempt - 1));
-          ok = ParagraphTranslator::translate(batch[translatableIndices[i]].trimmedText, sourceLang, targetLang, engine,
-                                              apiKey, translated, &lastError, httpSession);
-          if (ok) {
-            consecutive429 = 0;
-          } else if (!shouldRetryAfterFailure(HttpDownloader::lastHttpCode)) {
-            break;
-          }
-        }
+        // translateText splits a paragraph longer than the engine limit into sentence chunks.
+        const bool ok = translateText(batch[translatableIndices[i]].trimmedText, translated);
         if (ok) {
           consecutiveFailures = 0;
         } else {
@@ -357,6 +429,8 @@ void TranslationHtmlRewriter::flushBatch() {
           }
         }
         translations.push_back(ok ? std::move(translated) : std::string{});
+        if (ok) individualOk++;
+        publishLiveCounters(individualOk);
         // Optimistic progress + boundary check per paragraph: blocksProcessed only advances
         // in the write-out phase below (which overwrites this with the accurate count —
         // always >= this optimistic value, so the bar stays monotonic). Without this the
@@ -429,6 +503,8 @@ void TranslationHtmlRewriter::flushBatch() {
   delay(consecutiveFailures > 0 ? 2000 : 100);  // longer delay after errors to let heap recover
   batch.clear();
   batchTextBytes = 0;
+  flushDue = false;
+  publishLiveCounters();
 
   // Azure's bearer token expires mid-chapter on a long one. Renew it HERE, before the
   // caller's repaint: this batch's HTTP/TLS transients are already freed and the
@@ -463,12 +539,22 @@ void XMLCALL TranslationHtmlRewriter::onStart(void* ud, const XML_Char* name, co
 
   const std::string tag = makeOpenTag(name, atts);
 
+  // A <div> (dd/dt) being tracked as a paragraph turns out to wrap other blocks: stop tracking it
+  // and emit what it held so far untouched, then treat this nested block as a top-level one.
+  if (self->skipBlockDepth == -1 && self->blockDepth != -1 && self->blockIsDiv && isBlockTag(name)) {
+    self->writeOut(self->blockHtml);
+    self->blockHtml.clear();
+    self->blockText.clear();
+    self->blockDepth = -1;
+    self->blockIsDiv = false;
+  }
+
   if (self->skipBlockDepth != -1) {
-    // Inside a block being skipped (existing translation): ignore everything
+    // Inside a block being skipped (existing translation): dropped, or kept in fill-missing mode.
+    if (self->keepExistingTranslations) self->writeOut(tag);
   } else if (self->blockDepth != -1) {
     // Inside a block element: accumulate
     self->blockHtml += tag;
-    // Also track plain text for inner inline tags (no text here, just tag)
   } else if (!self->insideHead && isBlockTag(name)) {
     // Check for existing translation (Calibre or CrossPoint) — block element with `lang` attribute
     bool hasLangAttr = false;
@@ -481,12 +567,25 @@ void XMLCALL TranslationHtmlRewriter::onStart(void* ud, const XML_Char* name, co
       }
     }
     if (hasLangAttr) {
-      // Skip this block entirely — it's an existing translation paragraph
       self->skipBlockDepth = self->depth;
-      self->paragraphsSkipped++;
+      if (self->keepExistingTranslations) {
+        // Fill-missing: the original right before this block already has its translation, so it
+        // must not be sent again. Keep this translation block verbatim.
+        if (!self->batch.empty() && !self->batch.back().trimmedText.empty()) {
+          self->batchTextBytes -= self->batch.back().trimmedText.size();
+          self->batch.back().trimmedText.clear();
+          self->alreadyTranslated++;
+        }
+        self->writeOut(tag);
+      } else {
+        // Skip this block entirely — it's an existing translation paragraph
+        self->paragraphsSkipped++;
+      }
     } else {
+      if (self->flushDue) self->flushBatch();
       // Start of a new block element
       self->blockDepth = self->depth;
+      self->blockIsDiv = strcmp(name, "div") == 0 || strcmp(name, "dd") == 0 || strcmp(name, "dt") == 0;
       self->blockHtml = tag;
       self->blockText.clear();
       self->blockTagName = name;
@@ -512,7 +611,13 @@ void XMLCALL TranslationHtmlRewriter::onEnd(void* ud, const XML_Char* name) {
   auto* self = static_cast<TranslationHtmlRewriter*>(ud);
   self->depth--;
 
-  if (self->skipBlockDepth == self->depth) {
+  if (self->skipBlockDepth != -1 && self->keepExistingTranslations) {
+    // Inside (or closing) a kept translation block: pass the end tag through.
+    self->writeOut("</", 2);
+    self->writeOut(name, strlen(name));
+    self->writeOut(self->skipBlockDepth == self->depth ? ">\n" : ">", self->skipBlockDepth == self->depth ? 2 : 1);
+    if (self->skipBlockDepth == self->depth) self->skipBlockDepth = -1;
+  } else if (self->skipBlockDepth == self->depth) {
     // Done skipping an existing translation block
     self->skipBlockDepth = -1;
   } else if (self->skipBlockDepth != -1) {
@@ -527,6 +632,7 @@ void XMLCALL TranslationHtmlRewriter::onEnd(void* ud, const XML_Char* name) {
     } else {
       self->flushBlock(name);
     }
+    self->blockIsDiv = false;
   } else if (self->blockDepth != -1) {
     // Closing an inner element within a block
     self->blockHtml += "</";
@@ -544,7 +650,15 @@ void XMLCALL TranslationHtmlRewriter::onEnd(void* ud, const XML_Char* name) {
 
 void XMLCALL TranslationHtmlRewriter::onChars(void* ud, const XML_Char* s, int len) {
   auto* self = static_cast<TranslationHtmlRewriter*>(ud);
-  if (self->skipBlockDepth != -1) return;  // inside a skipped translation block
+  if (self->skipBlockDepth != -1) {
+    // Inside a skipped translation block: dropped, or kept verbatim in fill-missing mode.
+    if (self->keepExistingTranslations) {
+      std::string escaped;
+      appendEscaped(s, static_cast<size_t>(len), escaped);
+      self->writeOut(escaped);
+    }
+    return;
+  }
   if (self->blockDepth != -1) {
     // Inside a block: add to both HTML output and plain text
     appendEscaped(s, static_cast<size_t>(len), self->blockHtml);
@@ -559,7 +673,10 @@ void XMLCALL TranslationHtmlRewriter::onChars(void* ud, const XML_Char* s, int l
 
 void XMLCALL TranslationHtmlRewriter::onDefault(void* ud, const XML_Char* s, int len) {
   auto* self = static_cast<TranslationHtmlRewriter*>(ud);
-  if (self->skipBlockDepth != -1) return;  // inside a skipped translation block
+  if (self->skipBlockDepth != -1) {
+    if (self->keepExistingTranslations) self->writeOut(s, static_cast<size_t>(len));
+    return;
+  }
   // Handle HTML entities and pass through XML declarations / DOCTYPE
   if (len >= 2 && s[0] == '&' && s[len - 1] == ';') {
     // Entity reference — pass through as-is (expat already tried to expand)
@@ -588,12 +705,47 @@ void XMLCALL TranslationHtmlRewriter::onDefault(void* ud, const XML_Char* s, int
 
 // ─── Block counting (for progress bar) ──────────────────────────────────────
 
+namespace {
+// Mirrors onStart's block tracking so the progress denominator counts exactly the paragraphs the
+// rewriter will process: existing translations (lang=) are not counted, and a div that wraps other
+// blocks is uncounted again when its first nested block opens.
+struct BlockCountState {
+  int count = 0;
+  int depth = 0;
+  int trackedDepth = -1;
+  bool trackedIsDiv = false;
+  int skipDepth = -1;
+};
+}  // namespace
+
 void XMLCALL TranslationHtmlRewriter::onStartCount(void* ud, const XML_Char* name, const XML_Char** atts) {
-  (void)atts;
-  auto* count = static_cast<int*>(ud);
-  if (isBlockTag(name)) {
-    (*count)++;
+  auto* st = static_cast<BlockCountState*>(ud);
+  const int depth = st->depth++;
+  if (st->skipDepth != -1 || !isBlockTag(name)) return;
+  if (st->trackedDepth != -1) {
+    if (!st->trackedIsDiv) return;  // nested inside a tracked paragraph
+    st->count--;                    // the div was a wrapper after all
+    st->trackedDepth = -1;
   }
+  if (atts) {
+    for (int i = 0; atts[i]; i += 2) {
+      if (strcmp(atts[i], "lang") == 0 || strcmp(atts[i], "xml:lang") == 0) {
+        st->skipDepth = depth;
+        return;
+      }
+    }
+  }
+  st->count++;
+  st->trackedDepth = depth;
+  st->trackedIsDiv = strcmp(name, "div") == 0 || strcmp(name, "dd") == 0 || strcmp(name, "dt") == 0;
+}
+
+void XMLCALL TranslationHtmlRewriter::onEndCount(void* ud, const XML_Char* name) {
+  (void)name;
+  auto* st = static_cast<BlockCountState*>(ud);
+  const int depth = --st->depth;
+  if (st->skipDepth == depth) st->skipDepth = -1;
+  if (st->trackedDepth == depth) st->trackedDepth = -1;
 }
 
 int TranslationHtmlRewriter::countBlocksInFile(const std::string& inputPath) {
@@ -611,9 +763,9 @@ int TranslationHtmlRewriter::countBlocksInFile(const std::string& inputPath) {
     return 0;
   }
 
-  int blockCount = 0;
-  XML_SetUserData(parser, &blockCount);
-  XML_SetStartElementHandler(parser, onStartCount);
+  BlockCountState countState;
+  XML_SetUserData(parser, &countState);
+  XML_SetElementHandler(parser, onStartCount, onEndCount);
 
   char buf[PARSE_CHUNK];
   size_t totalRead = 0;
@@ -629,8 +781,8 @@ int TranslationHtmlRewriter::countBlocksInFile(const std::string& inputPath) {
   XML_ParserFree(parser);
   inputFile.close();
 
-  LOG_DBG("HtmlRW", "Pre-scan: %d translatable blocks in %s", blockCount, inputPath.c_str());
-  return blockCount;
+  LOG_DBG("HtmlRW", "Pre-scan: %d translatable blocks in %s", countState.count, inputPath.c_str());
+  return countState.count;
 }
 
 // ─── rewrite (buffer) ───────────────────────────────────────────────────────
@@ -672,6 +824,7 @@ TranslationHtmlRewriter::Result TranslationHtmlRewriter::rewrite(const char* inp
   batch.clear();
   pendingHtml.clear();
   batchTextBytes = 0;
+  resetRunState();
 
   XML_Parser parser = XML_ParserCreate("UTF-8");
   if (!parser) {
@@ -714,6 +867,7 @@ TranslationHtmlRewriter::Result TranslationHtmlRewriter::rewrite(const char* inp
   res.cancelled = wasCancelled || (cancelled && *cancelled);
   res.abortedOnErrors = abortedOnErrors;
   res.abortedLowMemory = abortedLowMemory;
+  res.alreadyTranslated = alreadyTranslated;
   if (abortedOnErrors && !lastError.empty()) {
     snprintf(res.errorDetail, sizeof(res.errorDetail), "%s", lastError.c_str());
   }
@@ -776,6 +930,7 @@ TranslationHtmlRewriter::Result TranslationHtmlRewriter::rewriteFromFile(
   batch.clear();
   pendingHtml.clear();
   batchTextBytes = 0;
+  resetRunState();
 
   HalFile inputFile;
   if (!Storage.openFileForRead("HtmlRW", inputPath, inputFile)) {
@@ -840,6 +995,7 @@ TranslationHtmlRewriter::Result TranslationHtmlRewriter::rewriteFromFile(
   res.cancelled = wasCancelled || (cancelled && *cancelled);
   res.abortedOnErrors = abortedOnErrors;
   res.abortedLowMemory = abortedLowMemory;
+  res.alreadyTranslated = alreadyTranslated;
   if (abortedOnErrors && !lastError.empty()) {
     snprintf(res.errorDetail, sizeof(res.errorDetail), "%s", lastError.c_str());
   }

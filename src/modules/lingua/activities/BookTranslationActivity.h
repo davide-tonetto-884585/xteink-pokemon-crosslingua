@@ -7,6 +7,7 @@
 #include <string>
 
 #include "activities/Activity.h"
+#include "components/themes/BaseTheme.h"
 #include "modules/lingua/activities/TranslationReturnTarget.h"
 #include "modules/lingua/parsers/TranslationHtmlRewriter.h"
 #include "modules/lingua/ui/LinguaModeChooser.h"
@@ -89,7 +90,24 @@ class BookTranslationActivity final : public Activity {
   bool skipTranslated = false;
   int alreadyTranslatedCount = 0;
   int totalChapters = 0;
-  int confirmSelection = 0;  // 0=skip translated, 1=re-translate all
+  int confirmSelection = 0;  // 0=translated chapters: fill missing only, 1=re-translate all
+
+  // Option buttons (CONFIRM_RETRANSLATE, DONE summary) and their tap rectangles.
+  Rect optionRects[2];
+  int optionCount = 0;
+  int doneSelection = 0;
+  std::string bookTitle;
+  // Live / accumulated paragraph counters (written by the worker task).
+  volatile int liveTranslated = 0;  // current chapter
+  volatile int liveFailed = 0;
+  volatile int bookTranslated = 0;  // finished chapters
+  volatile int bookFailed = 0;
+  volatile int bookAlreadyTranslated = 0;
+  unsigned long runStartMillis = 0;
+  unsigned long runEndMillis = 0;
+  int drawInfoBlock(int y);
+  void activateDoneOption(int index);
+  void startConfirmChoice(int index);
 
   // ─── Translation task ──────────────────────────────────────────────────────
   TaskHandle_t taskHandle = nullptr;
