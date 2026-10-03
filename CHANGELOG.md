@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Added
+
+- **Recap** (reader menu; on touch devices, the More tab of the reader drawer): Google Gemini summarizes the last 3, 5, 10 or 20 pages you read in the current chapter, or the whole chapter up to your page, so you can catch up after a break. The recap is written in your interface language and covers only what you have read: it never reveals later events. You need a free Gemini API key from Google AI Studio, entered once in Recap → Gemini API key; no credit card is required. If Gemini 3 Flash is rate-limited, the reader falls back to Gemini 3.1 Flash-Lite. On the free tier, Google may use the text you send to improve its models. See [docs/chapter-recap.md](docs/chapter-recap.md). English and Italian only for now.
+
 ## [1.9.1] - 2026-10-03
 
 ### Fixed

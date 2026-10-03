@@ -61,6 +61,13 @@ while translating - the bilingual copy is stored on the SD card next to the orig
 which is never modified. Open a book, press **Confirm** and choose **Lingua**. Full guide:
 [Lingua](docs/lingua.md).
 
+### Chapter recap (Gemini)
+
+Back to a book after a break? Open the reader menu and choose **Recap**: Google Gemini
+summarizes the last 3-20 pages of the current chapter (or the chapter so far) in your
+interface language, without revealing anything you have not read yet. It needs a free
+Gemini API key from Google AI Studio and Wi-Fi. Full guide: [Chapter Recap](docs/chapter-recap.md).
+
 ### Pokémon save transfer between readers
 
 Send your whole Pokémon game (party, PC Box, Bag, Pokédex, badges, movesets, IVs/EVs and
