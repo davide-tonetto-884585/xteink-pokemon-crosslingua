@@ -4,6 +4,17 @@
 
 - **Recap** (reader menu; on touch devices, the More tab of the reader drawer): Google Gemini summarizes the last 3, 5, 10 or 20 pages you read in the current chapter, or the whole chapter up to your page, so you can catch up after a break. The recap is written in your interface language and covers only what you have read: it never reveals later events. You need a free Gemini API key from Google AI Studio, entered once in Recap → Gemini API key; no credit card is required. If Gemini 3 Flash is rate-limited, the reader falls back to Gemini 3.1 Flash-Lite. On the free tier, Google may use the text you send to improve its models. See [docs/chapter-recap.md](docs/chapter-recap.md). English and Italian only for now.
 
+### Changed
+
+- Lingua translation screens (Translate Current Chapter and Translate Book): the status bar with the battery is back, and the progress screen now shows the book, the languages and the translation engine, the chapter (and, for a book, the overall) progress, how many paragraphs were translated or failed, the elapsed time and an estimate of the time left. On touch devices, tap the bottom of the screen to cancel.
+- Translating a chapter or book that is already translated now offers **Translate missing only**: it keeps the existing translation and sends only the paragraphs still in the original language. If nothing is missing, it makes no network request.
+- When translation finishes, a summary shows what was translated, what failed and how long it took. If some paragraphs failed, **Retry missing (N)** translates only those. **Continue** opens the display-mode chooser as before.
+
+### Fixed
+
+- Lingua: some sections of a chapter stayed untranslated. Paragraphs longer than about 1800 bytes were skipped; they are now split at sentence ends and translated in pieces. Text placed directly in `div`, `dt` or `dd` blocks (common in some EPUBs) was ignored; it is now translated. Network errors left paragraphs in the original language without any warning; each request is now tried up to 3 times, and the summary reports any paragraphs that still failed.
+- Translate Book: a chapter where every request failed stopped the whole book. The book now continues with the next chapter, and Retry missing picks the failed chapter up later.
+
 ## [1.9.1] - 2026-10-03
 
 ### Fixed

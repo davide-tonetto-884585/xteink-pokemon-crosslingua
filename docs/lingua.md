@@ -149,15 +149,32 @@ the chapter (or the book) before selecting a translation-dependent mode.
 ## Re-translating
 
 If a chapter is already translated, the menu shows **Re-translate Chapter**
-instead of "Translate Chapter". Re-translation deletes the current
-bilingual copy and starts over. Useful if you change target language or
-engine.
+instead of "Translate Chapter". It offers two options:
 
-For whole books, **Re-translate Book** has two sub-options:
+- **Translate missing only**: keeps the existing translation and sends only
+  the paragraphs still in the original language (for example after a network
+  error). If nothing is missing, no request is made.
+- **Re-translate All**: translates the chapter again from scratch. Useful if
+  you change target language or engine. The previous translation is kept if
+  every request fails.
 
-- **Skip Translated** — only re-translates chapters that don't have a
-  bilingual copy yet (resume after a cancel)
-- **Re-translate All** — wipes and redoes every chapter
+**Re-translate Book** offers the same two options. With **Translate missing
+only**, chapters without a translation are translated in full and the others
+are completed. This is also how you resume after a cancel.
+
+## Progress and summary
+
+While translating, the screen shows the book, the languages and the engine,
+the progress of the chapter (and of the whole book), how many paragraphs were
+translated or failed, the elapsed time and an estimate of the time left. On
+touch devices, tap the bottom of the screen to cancel.
+
+When it finishes, a summary shows the counts and the total time. If some
+paragraphs failed, **Retry missing (N)** translates only those. **Continue**
+opens the display-mode chooser.
+
+Long paragraphs are split at sentence ends and sent in pieces, and each
+request is tried up to 3 times before it counts as failed.
 
 ## Deleting translations
 
