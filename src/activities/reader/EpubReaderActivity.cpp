@@ -62,6 +62,8 @@
 #include "activities/home/RecentBookProgress.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
+#include "activities/util/OptionSelectionActivity.h"
 #include "clippings/ClippingHighlightGeometry.h"
 #include "clippings/ClippingMatchTracker.h"
 #include "clippings/ClippingTextMatcher.h"
@@ -81,6 +83,8 @@
 #include "modules/lingua/activities/BookTranslationActivity.h"
 #include "modules/lingua/activities/ChapterTranslationActivity.h"
 #include "modules/lingua/activities/LinguaSubmenuActivity.h"
+#include "modules/recap/ChapterRecapActivity.h"
+#include "modules/recap/RecapText.h"
 
 namespace {
 constexpr unsigned long TOUCH_DICTIONARY_LOOKUP_HOLD_MS = 1000;
@@ -4176,6 +4180,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           });
       break;
     }
+    case EpubReaderMenuActivity::MenuAction::RECAP:
+      openRecapPicker(returnToReaderMenu);
+      break;
     case EpubReaderMenuActivity::MenuAction::AUTO_PAGE_TURN:
       openAutoPageTurnIntervalPicker(false, returnToReaderMenu);
       break;
@@ -4209,6 +4216,145 @@ void EpubReaderActivity::launchTranslation(const LinguaResult kind) {
     activityManager.replaceActivity(std::make_unique<ChapterTranslationActivity>(
         renderer, mappedInput, epubPath, spineIndex, translatedPath, alreadyTranslated));
   }
+}
+
+namespace {
+// Excerpt sizes offered by the recap picker, in pages; 0 = the chapter up to the current page.
+constexpr int RECAP_PAGE_OPTIONS[] = {3, 5, 10, 20, 0};
+constexpr uint8_t RECAP_PAGE_OPTION_COUNT = sizeof(RECAP_PAGE_OPTIONS) / sizeof(RECAP_PAGE_OPTIONS[0]);
+// "Chapter so far" never loads more than this many pages: the excerpt is capped at
+// recap::MAX_INPUT_BYTES anyway, which a few dozen pages always exceed.
+constexpr int RECAP_MAX_LOADED_PAGES = 30;
+
+bool hasRecapApiKey() {
+  return SETTINGS.recapApiKey[0] != '\0' ||
+         (SETTINGS.translationEngine == CrossPointSettings::ENGINE_GEMINI && SETTINGS.translateApiKey[0] != '\0');
+}
+}  // namespace
+
+void EpubReaderActivity::openRecapPicker(const bool returnToReaderMenu) {
+  if (!epub || !section) return;
+  std::vector<std::string> options;
+  options.reserve(RECAP_PAGE_OPTION_COUNT + 1);
+  char label[48];
+  for (const int pages : RECAP_PAGE_OPTIONS) {
+    if (pages == 0) {
+      options.emplace_back(tr(STR_RECAP_CHAPTER_SO_FAR));
+    } else {
+      snprintf(label, sizeof(label), tr(STR_RECAP_LAST_PAGES_FORMAT), pages);
+      options.emplace_back(label);
+    }
+  }
+  options.emplace_back(tr(STR_RECAP_API_KEY));
+  const uint8_t selected = SETTINGS.recapLengthIndex < RECAP_PAGE_OPTION_COUNT ? SETTINGS.recapLengthIndex : 1;
+
+  pauseReadingPaceTimer("recap_picker");
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "RecapLengthSelect", StrId::STR_RECAP,
+                                                std::move(options), selected, /*readerMode=*/true,
+                                                /*showTouchHeaderBackButton=*/mappedInput.hasTouchHardware()),
+      [this, returnToReaderMenu](const ActivityResult& result) {
+        const auto* selection = std::get_if<OptionSelectionResult>(&result.data);
+        if (result.isCancelled || !selection) {
+          resumeReadingPaceTimer("recap_picker_cancel");
+          if (returnToReaderMenu && mappedInput.hasTouchHardware()) {
+            openReaderMenu();
+            return;
+          }
+          requestUpdate();
+          return;
+        }
+        if (selection->index >= RECAP_PAGE_OPTION_COUNT) {
+          promptRecapApiKey(-1);  // edit the key only
+          return;
+        }
+        if (SETTINGS.recapLengthIndex != selection->index) {
+          SETTINGS.recapLengthIndex = selection->index;
+          SETTINGS.saveToFile();
+        }
+        const int pages = RECAP_PAGE_OPTIONS[selection->index];
+        if (!hasRecapApiKey()) {
+          promptRecapApiKey(pages);
+          return;
+        }
+        launchRecap(pages);
+      });
+}
+
+void EpubReaderActivity::promptRecapApiKey(const int pagesToRecap) {
+  startActivityForResult(
+      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, std::string(tr(STR_RECAP_API_KEY)),
+                                              std::string(SETTINGS.recapApiKey), sizeof(SETTINGS.recapApiKey) - 1,
+                                              InputType::Password),
+      [this, pagesToRecap](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          const auto& keyboard = std::get<KeyboardResult>(result.data);
+          std::strncpy(SETTINGS.recapApiKey, keyboard.text.c_str(), sizeof(SETTINGS.recapApiKey) - 1);
+          SETTINGS.recapApiKey[sizeof(SETTINGS.recapApiKey) - 1] = '\0';
+          SETTINGS.saveToFile();
+          if (pagesToRecap >= 0 && hasRecapApiKey()) {
+            launchRecap(pagesToRecap);
+            return;
+          }
+        }
+        resumeReadingPaceTimer("recap_key_return");
+        requestUpdate();
+      });
+}
+
+void EpubReaderActivity::launchRecap(const int pages) {
+  if (!epub || !section) return;
+  const int spineIndex = currentSpineIndex;
+  const int currentPage = section->currentPage;
+
+  ChapterRecapActivity::Excerpt excerpt;
+  excerpt.bookTitle = epub->getTitle();
+  const int tocIndex = epub->getTocIndexForSpineIndex(spineIndex);
+  if (tocIndex >= 0) excerpt.chapterTitle = epub->getTocItem(tocIndex).title;
+
+  {
+    // Pages are read from the section file the render task also reads; hold the lock while
+    // walking them.
+    RenderLock lock(*this);
+    const int wanted = pages > 0 ? pages : currentPage + 1;
+    const int firstPage = std::max(0, currentPage - std::min(wanted, RECAP_MAX_LOADED_PAGES) + 1);
+    recap::RecapTextBuilder builder;
+    int loaded = 0;
+    for (int pageIndex = firstPage; pageIndex <= currentPage; pageIndex++) {
+      auto page = section->loadPage(pageIndex);
+      if (!page) continue;
+      loaded++;
+      forEachPageTextLine(*page, [&builder](const PageTextLine& line) {
+        const TextBlock& block = *line.block;
+        for (uint16_t i = 0; i < block.wordCount(); i++) {
+          builder.addWord(block.wordText(i), block.wordTextLen(i), block.wordHasSpaceBefore(i),
+                          block.wordEndsWithInsertedHyphen(i));
+        }
+        builder.endLine();
+        return true;
+      });
+      builder.endPage();
+    }
+    excerpt.text = builder.take();
+    const bool trimmed = recap::keepTail(excerpt.text, recap::MAX_INPUT_BYTES);
+    excerpt.startsMidChapter = firstPage > 0 || trimmed;
+    excerpt.pageCount = loaded;
+  }
+  LOG_INF("RECAP", "Excerpt: spine %d, pages up to %d, %u bytes", spineIndex, currentPage,
+          static_cast<unsigned>(excerpt.text.size()));
+
+  // Same hand-off as launchTranslation(): persist the position, then tear the reader down so the
+  // recap's TLS session gets the heap. Back in the recap relaunches the reader from disk.
+  const std::string epubPath = epub->getPath();
+  saveProgress(spineIndex, currentPage, section->estimatedTotalPages());
+  lingua.onReaderExit();
+  {
+    RenderLock lock(*this);
+    ImageBlock::setExtractor(nullptr, nullptr, nullptr);
+    section.reset();
+  }
+  activityManager.replaceActivity(
+      std::make_unique<ChapterRecapActivity>(renderer, mappedInput, epubPath, std::move(excerpt)));
 }
 
 PageFontSet EpubReaderActivity::linguaPageFonts(const int bodyFontId) const {

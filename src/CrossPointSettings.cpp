@@ -499,6 +499,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["sourceTranslationLanguage"] = sourceTranslationLanguage;
   doc["translationEngine"] = translationEngine;
   doc["translateApiKey"] = translateApiKey;
+  doc["recapApiKey"] = recapApiKey;
+  doc["recapLengthIndex"] = recapLengthIndex;
   doc["translationDisplayMode"] = translationDisplayMode;
   doc["translationShade"] = translationShade;
   // One colour key per mode that owns one; see the LINGUA_SHADE comment for why they are never
@@ -812,6 +814,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc, bool importingCrossPoint
   translationEngine = clamp(doc["translationEngine"] | (uint8_t)ENGINE_GOOGLE_V2, (uint8_t)TRANSLATION_ENGINE_COUNT,
                             (uint8_t)ENGINE_GOOGLE_V2);
   copyToField(translateApiKey, doc["translateApiKey"] | "", sizeof(translateApiKey));
+  copyToField(recapApiKey, doc["recapApiKey"] | "", sizeof(recapApiKey));
+  recapLengthIndex = doc["recapLengthIndex"] | recapLengthIndex;
   translationShade =
       clamp(doc["translationShade"] | (uint8_t)SHADE_DIMMED, (uint8_t)TRANSLATION_SHADE_COUNT, (uint8_t)SHADE_DIMMED);
   // Absent key (every install that predates the rows) adopts LINGUA_BLACK, which is what both modes

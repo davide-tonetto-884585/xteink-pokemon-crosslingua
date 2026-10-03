@@ -246,6 +246,12 @@ class EpubReaderActivity final : public Activity {
   // CrossLingua: overlay modes, fallback dialog and per-page font set for translated books.
   LinguaReaderIntegration lingua;
   void launchTranslation(LinguaResult kind);
+  // Chapter recap (reader menu): excerpt-length picker, Gemini key prompt when none is set, then
+  // launchRecap() extracts the excerpt and hands off to ChapterRecapActivity. `pages` == 0 means
+  // the whole chapter up to the current page.
+  void openRecapPicker(bool returnToReaderMenu);
+  void promptRecapApiKey(int pagesToRecap);
+  void launchRecap(int pages);
   PageFontSet linguaPageFonts(int bodyFontId) const;
   // The end screen owns these UI resources only while it is visible.
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;

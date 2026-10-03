@@ -689,6 +689,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t sourceTranslationLanguage = 0xFF;
   uint8_t translationEngine = ENGINE_GOOGLE_V2;
   char translateApiKey[128] = "";
+  // Chapter recap (reader menu): Google AI Studio (Gemini API) key and the last chosen excerpt size,
+  // an index into the recap length picker. Managed by the recap flow, not SettingsList.
+  char recapApiKey[128] = "";
+  uint8_t recapLengthIndex = 1;
   uint8_t translationDisplayMode = LINGUA_NORMAL;
   // Interleaved-mode (LINGUA_INTERLEAVED) translated-text colour. Drawing-only; see TRANSLATION_SHADE.
   uint8_t translationShade = SHADE_DIMMED;

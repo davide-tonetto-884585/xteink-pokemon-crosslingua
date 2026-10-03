@@ -239,7 +239,7 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(
   auto& bookmarkItems = items[BOOKMARKS_TAB_INDEX];
   auto& settingsItems = items[SETTINGS_TAB_INDEX];
 
-  mainItems.reserve(10 + (hasFootnotes ? 1u : 0u) + (hasDictionary ? 2u : 0u));
+  mainItems.reserve(11 + (hasFootnotes ? 1u : 0u) + (hasDictionary ? 2u : 0u));
   bookmarkItems.reserve(9 + (hasBookmarks ? 2u : 0u) + (hasClippings ? 1u : 0u));
   settingsItems.reserve(6);
 
@@ -252,6 +252,7 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(
   }
   mainItems.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   mainItems.push_back({MenuAction::LINGUA, StrId::STR_LINGUA});
+  mainItems.push_back({MenuAction::RECAP, StrId::STR_RECAP});
   mainItems.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
   if (hasStablePageNumbers) {
     mainItems.push_back({MenuAction::GO_TO_STABLE_PAGE, StrId::STR_GO_TO_STABLE_PAGE});

@@ -70,15 +70,18 @@ TEST(ReaderDrawerModel, CatalogOrderAndConditionalRowsMatchTouchDesign) {
   EXPECT_EQ(layout.items[3], ReaderDrawerCatalogItem::Images);
 
   const auto& minimalMore = minimal[static_cast<size_t>(ReaderDrawerTab::More)];
-  EXPECT_EQ(minimalMore.count, 3);
+  // SelectChapter, GoToPercent, AutoPageTurn, then the always-last Lingua and Recap rows.
+  EXPECT_EQ(minimalMore.count, 5);
   EXPECT_EQ(minimalMore.items[0], ReaderDrawerCatalogItem::SelectChapter);
   EXPECT_EQ(minimalMore.items[2], ReaderDrawerCatalogItem::AutoPageTurn);
+  EXPECT_EQ(minimalMore.items[3], ReaderDrawerCatalogItem::Lingua);
+  EXPECT_EQ(minimalMore.items[4], ReaderDrawerCatalogItem::Recap);
 
   ReaderDrawerAvailability stableAvailable{};
   stableAvailable.hasStablePageNumbers = true;
   const ReaderDrawerCatalog stableCatalog = makeReaderDrawerCatalog(stableAvailable);
   const auto& stableMore = stableCatalog[static_cast<size_t>(ReaderDrawerTab::More)];
-  EXPECT_EQ(stableMore.count, 4);
+  EXPECT_EQ(stableMore.count, 6);
   EXPECT_EQ(stableMore.items[1], ReaderDrawerCatalogItem::GoToPercent);
   EXPECT_EQ(stableMore.items[2], ReaderDrawerCatalogItem::GoToStablePage);
 
@@ -89,13 +92,16 @@ TEST(ReaderDrawerModel, CatalogOrderAndConditionalRowsMatchTouchDesign) {
 
   const ReaderDrawerCatalog complete = makeReaderDrawerCatalog({true, true, true, true, true, true});
   const auto& more = complete[static_cast<size_t>(ReaderDrawerTab::More)];
-  EXPECT_EQ(more.count, 7);
+  EXPECT_EQ(more.count, 9);
   EXPECT_EQ(more.items[0], ReaderDrawerCatalogItem::Lookup);
   EXPECT_EQ(more.items[1], ReaderDrawerCatalogItem::LookupHistory);
   EXPECT_EQ(more.items[2], ReaderDrawerCatalogItem::SelectChapter);
   EXPECT_EQ(more.items[3], ReaderDrawerCatalogItem::GoToPercent);
   EXPECT_EQ(more.items[4], ReaderDrawerCatalogItem::GoToStablePage);
   EXPECT_EQ(more.items[5], ReaderDrawerCatalogItem::AutoPageTurn);
+  EXPECT_EQ(more.items[6], ReaderDrawerCatalogItem::Footnotes);
+  EXPECT_EQ(more.items[7], ReaderDrawerCatalogItem::Lingua);
+  EXPECT_EQ(more.items[8], ReaderDrawerCatalogItem::Recap);
 
   const auto& location = complete[static_cast<size_t>(ReaderDrawerTab::Location)];
   EXPECT_EQ(location.count, 7);
