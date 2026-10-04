@@ -32,12 +32,17 @@ const char* currentLanguageName() {
 
 std::string describeHttpFailure(const int code, const std::string& body) {
   const std::string apiMessage = recap::parseGeminiError(body);
-  char buf[64];
+  char buf[112];
   if (code == 400 && apiMessage.find("API key") != std::string::npos) return tr(STR_RECAP_INVALID_KEY);
   if (code == 401 || code == 403) return tr(STR_RECAP_INVALID_KEY);
   if (code == 429) return tr(STR_RECAP_QUOTA);
   if (code <= 0) {
-    snprintf(buf, sizeof(buf), "%s (%d)", tr(STR_RECAP_CONNECTION_FAILED), code);
+    // The transport error name (DNS/connect, TLS, timeout...) is the only clue on the device.
+    if (HttpDownloader::lastErrorName) {
+      snprintf(buf, sizeof(buf), "%s (%s)", tr(STR_RECAP_CONNECTION_FAILED), HttpDownloader::lastErrorName);
+    } else {
+      snprintf(buf, sizeof(buf), "%s (%d)", tr(STR_RECAP_CONNECTION_FAILED), code);
+    }
     return buf;
   }
   snprintf(buf, sizeof(buf), "HTTP %d", code);
@@ -153,11 +158,22 @@ void ChapterRecapActivity::runJob(Job& job) {
   request.chapterTitle = job.chapterTitle.c_str();
   request.startsMidChapter = job.startsMidChapter;
 
+#ifndef SIMULATOR
+  // Same as the Lingua translation tasks: resolve googleapis.com through public DNS (some routers'
+  // resolvers fail on it) and give the new settings a moment before the first connect.
+  WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(), IPAddress(8, 8, 8, 8), IPAddress(8, 8, 4, 4));
+  delay(500);
+#endif
+
   std::string response;
+  ReusableHttpSession heapGate;
   for (size_t modelIndex = 0; modelIndex < recap::GEMINI_MODEL_COUNT; modelIndex++) {
     const char* model = recap::GEMINI_MODELS[modelIndex];
     request.lowThinking = true;
-    for (int attempt = 0; attempt < 2; attempt++) {
+    int transportRetries = 0;
+    for (int attempt = 0; attempt < 4; attempt++) {
+      // The TLS handshake needs a large contiguous block; wait briefly for the heap to settle.
+      heapGate.waitForHeapReady(5000, nullptr);
       std::string body = recap::buildGeminiRequestBody(request);
       LOG_DBG("RECAP", "POST %s (%u bytes, heap %u/%u)", model, static_cast<unsigned>(body.size()),
               static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
@@ -182,7 +198,14 @@ void ChapterRecapActivity::runJob(Job& job) {
         return;
       }
 
-      LOG_ERR("RECAP", "%s failed: HTTP %d (%.160s)", model, code, response.c_str());
+      LOG_ERR("RECAP", "%s failed: HTTP %d %s (%.160s)", model, code,
+              HttpDownloader::lastErrorName ? HttpDownloader::lastErrorName : "", response.c_str());
+      // Connection-level failure (DNS, TLS, timeout): try the same model again after a pause.
+      if (code <= 0 && transportRetries < 2) {
+        transportRetries++;
+        delay(1500);
+        continue;
+      }
       // A model that does not accept the thinking setting answers 400 on an otherwise valid
       // request: retry it once without the setting before giving up on it.
       const bool keyRejected = recap::parseGeminiError(response).find("API key") != std::string::npos;

@@ -80,6 +80,10 @@ class HttpDownloader {
   // Last HTTP response code from the most recent post/postJson call. Negative values indicate
   // connection-level failures; positive values are HTTP status codes.
   static int lastHttpCode;
+  // Name of the transport error (e.g. "ESP_ERR_HTTP_CONNECT") when the most recent post/postJson
+  // failed before any HTTP status arrived; nullptr otherwise. Shown to the user so a failure on the
+  // device can be told apart (DNS/connect, TLS, timeout) without a serial log.
+  static const char* lastErrorName;
 
   static bool fetchUrl(const std::string& url, Stream& stream, const std::string& username = "",
                        const std::string& password = "");

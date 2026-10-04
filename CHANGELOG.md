@@ -1,3 +1,10 @@
+## [Unreleased]
+
+### Fixed
+
+- Lingua with the default Google engine: paragraphs longer than about 500 characters were never translated on the device, and Retry missing / Translate missing only failed on them again. The paragraph travels in the request address, which did not fit the network client's 1 KB request buffer; the buffer now grows to fit. The simulator did not show the problem.
+- Recap: "Could not reach Gemini" now names the network error (for example `ESP_ERR_HTTP_CONNECT`). The request now uses public DNS like Lingua translation, waits for enough free memory before connecting, and retries a failed connection twice before giving up.
+
 ## [1.10.0] - 2026-10-04
 
 ### Added

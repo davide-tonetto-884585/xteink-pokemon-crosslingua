@@ -32,6 +32,15 @@ constexpr uint32_t DOWNLOAD_IDLE_TIMEOUT_MS = 30000;
 constexpr size_t DEFAULT_DOWNLOAD_BUFFER_SIZE = 2048;
 constexpr uint8_t MAX_REDIRECTS = 5;
 
+// esp_http_client builds the request line ("GET <path>?<query> HTTP/1.1") inside its TX buffer and
+// fails the whole request with "Out of buffer" when that line does not fit. Lingua's Google engine
+// sends the paragraph in the query string, so a fixed 1 KB buffer silently failed every paragraph
+// longer than roughly 500 characters. Size the buffer to the URL instead (small URLs keep 1 KB).
+int txBufferSizeFor(const std::string& url) {
+  const size_t needed = url.size() + 64;  // method, " HTTP/1.1\r\n", slack
+  return needed > static_cast<size_t>(HTTP_TX_BUF) ? static_cast<int>(needed) : HTTP_TX_BUF;
+}
+
 void logNetworkState(const char* phase) {
   LOG_DBG("HTTP", "%s: heap free=%u maxAlloc=%u wifi=%d rssi=%d", phase, ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
           static_cast<int>(WiFi.status()), WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
@@ -267,7 +276,7 @@ HttpDownloader::DownloadError runGetDefault(const std::string& url, const std::s
     esp_http_client_config_t config = {};
     config.url = currentUrl.c_str();
     config.buffer_size = HTTP_RX_BUF;
-    config.buffer_size_tx = HTTP_TX_BUF;
+    config.buffer_size_tx = txBufferSizeFor(currentUrl);
     config.timeout_ms = HTTP_TIMEOUT_MS;
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.keep_alive_enable = false;
@@ -458,6 +467,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
 }
 
 int HttpDownloader::lastHttpCode = 0;
+const char* HttpDownloader::lastErrorName = nullptr;
 
 namespace {
 // Lingua: buffered request (translation engines answer in the KB range). Uses perform() with an
@@ -472,17 +482,18 @@ esp_err_t collectResponseBody(esp_http_client_event_t* evt) {
 
 bool runBufferedRequest(const bool isPost, const std::string& url, const std::string& body, const char* contentType,
                         const char* extraHeaderName, const char* extraHeaderValue, const char* userAgent,
-                        std::string& outContent, int& outStatus) {
+                        std::string& outContent, int& outStatus, const char** outErrorName = nullptr) {
   WifiPowerSaveGuard wifiPowerSaveGuard;
   (void)wifiPowerSaveGuard;
   outContent.clear();
   outStatus = -1;
+  if (outErrorName) *outErrorName = nullptr;
 
   esp_http_client_config_t config = {};
   config.url = url.c_str();
   config.method = isPost ? HTTP_METHOD_POST : HTTP_METHOD_GET;
   config.buffer_size = HTTP_RX_BUF;
-  config.buffer_size_tx = HTTP_TX_BUF;
+  config.buffer_size_tx = txBufferSizeFor(url);
   config.timeout_ms = HTTP_TIMEOUT_MS;
   config.crt_bundle_attach = esp_crt_bundle_attach;
   config.keep_alive_enable = false;
@@ -492,6 +503,8 @@ bool runBufferedRequest(const bool isPost, const std::string& url, const std::st
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (!client) {
     LOG_ERR("HTTP", "Buffered request client init failed");
+    logNetworkState("Buffered client init failure");
+    if (outErrorName) *outErrorName = "client init failed";
     return false;
   }
   esp_http_client_set_header(client, "User-Agent", userAgent ? userAgent : "CrossInk-ESP32-" CROSSINK_VERSION);
@@ -508,6 +521,9 @@ bool runBufferedRequest(const bool isPost, const std::string& url, const std::st
   const esp_err_t err = esp_http_client_perform(client);
   if (err != ESP_OK) {
     LOG_ERR("HTTP", "Buffered request failed: %s", esp_err_to_name(err));
+    logTlsError(client, "Buffered request");
+    logNetworkState("Buffered request failure");
+    if (outErrorName) *outErrorName = esp_err_to_name(err);
     esp_http_client_cleanup(client);
     return false;
   }
@@ -526,7 +542,8 @@ bool HttpDownloader::post(const std::string& url, const std::string& body, const
   LOG_DBG("HTTP", "POST (body=%u bytes)", static_cast<unsigned>(body.size()));
   int status = -1;
   const bool ok =
-      runBufferedRequest(true, url, body, contentType, extraHeaderName, extraHeaderValue, nullptr, outContent, status);
+      runBufferedRequest(true, url, body, contentType, extraHeaderName, extraHeaderValue, nullptr, outContent, status,
+                         &lastErrorName);
   lastHttpCode = status;
   return ok;
 }
