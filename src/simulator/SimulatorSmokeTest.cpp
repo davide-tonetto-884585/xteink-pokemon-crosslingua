@@ -2249,10 +2249,6 @@ class SimulatorSmokeTest {
   }
 #endif
 
-  static ScriptAction assertActivity(const char* name) {
-    return {ScriptActionType::AssertActivity, MappedInputManager::Button::Back, name, 0, 0, 0};
-  }
-
   void addTap(MappedInputManager::Button button) {
     inputScript.push_back(press(button));
     inputScript.push_back(release(button));

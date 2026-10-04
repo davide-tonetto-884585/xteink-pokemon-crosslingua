@@ -586,8 +586,9 @@ inline SettingInfo buildSideButtonActionSetting(const StrId nameId, uint8_t Cros
 // can use it directly; mutable device UI lists use getSettingsList(), which
 // returns an owned copy and can add SD-card font and dictionary options.
 // Four edge gesture entries are compiled only for touch devices.
-// This fork adds 3 Slideshow entries plus 1 gated behind CROSSINK_ENABLE_POKEMON on top of upstream's count.
-inline constexpr size_t BASE_SETTINGS_CAPACITY = 108 + (CROSSINK_APP_CAP_TOUCH ? 4 : 0);
+// Sized from the measured pokemon-x3 count (109): this fork adds 3 Slideshow entries plus 1 entry gated behind
+// CROSSINK_ENABLE_POKEMON on top of upstream's entries; reserved for the max case.
+inline constexpr size_t BASE_SETTINGS_CAPACITY = 109 + (CROSSINK_APP_CAP_TOUCH ? 4 : 0);
 
 const std::vector<SettingInfo>& getBaseSettingsList();
 
