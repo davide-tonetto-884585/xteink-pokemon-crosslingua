@@ -4226,6 +4226,33 @@ constexpr uint8_t RECAP_PAGE_OPTION_COUNT = sizeof(RECAP_PAGE_OPTIONS) / sizeof(
 // recap::MAX_INPUT_BYTES anyway, which a few dozen pages always exceed.
 constexpr int RECAP_MAX_LOADED_PAGES = 30;
 
+// A Gemini key is ~40-55 characters: hard to type on the device. Saving it as /gemini-api-key.txt
+// on the SD card (USB or the Wi-Fi file transfer) imports it on the next Recap; the file is then
+// deleted so the key does not linger in plain sight.
+constexpr char RECAP_KEY_IMPORT_PATH[] = "/gemini-api-key.txt";
+
+std::string trimmedKey(const std::string& raw) {
+  const char* ws = " \t\r\n";
+  const size_t start = raw.find_first_not_of(ws);
+  if (start == std::string::npos) return std::string();
+  return raw.substr(start, raw.find_last_not_of(ws) - start + 1);
+}
+
+void importRecapApiKeyFromSd() {
+  if (!Storage.exists(RECAP_KEY_IMPORT_PATH)) return;
+  char buffer[sizeof(SETTINGS.recapApiKey) + 16] = {};
+  const size_t read = Storage.readFileToBuffer(RECAP_KEY_IMPORT_PATH, buffer, sizeof(buffer) - 1);
+  const std::string key = trimmedKey(std::string(buffer, read));
+  if (!key.empty() && key.size() < sizeof(SETTINGS.recapApiKey)) {
+    std::strncpy(SETTINGS.recapApiKey, key.c_str(), sizeof(SETTINGS.recapApiKey) - 1);
+    SETTINGS.recapApiKey[sizeof(SETTINGS.recapApiKey) - 1] = '\0';
+    SETTINGS.saveToFile();
+    LOG_INF("RECAP", "Imported Gemini API key from %s (%u chars)", RECAP_KEY_IMPORT_PATH,
+            static_cast<unsigned>(key.size()));
+  }
+  Storage.remove(RECAP_KEY_IMPORT_PATH);
+}
+
 bool hasRecapApiKey() {
   return SETTINGS.recapApiKey[0] != '\0' ||
          (SETTINGS.translationEngine == CrossPointSettings::ENGINE_GEMINI && SETTINGS.translateApiKey[0] != '\0');
@@ -4234,6 +4261,7 @@ bool hasRecapApiKey() {
 
 void EpubReaderActivity::openRecapPicker(const bool returnToReaderMenu) {
   if (!epub || !section) return;
+  importRecapApiKeyFromSd();
   std::vector<std::string> options;
   options.reserve(RECAP_PAGE_OPTION_COUNT + 1);
   char label[48];
@@ -4285,11 +4313,14 @@ void EpubReaderActivity::promptRecapApiKey(const int pagesToRecap) {
   startActivityForResult(
       std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, std::string(tr(STR_RECAP_API_KEY)),
                                               std::string(SETTINGS.recapApiKey), sizeof(SETTINGS.recapApiKey) - 1,
-                                              InputType::Password),
+                                              InputType::Text),
       [this, pagesToRecap](const ActivityResult& result) {
         if (!result.isCancelled) {
           const auto& keyboard = std::get<KeyboardResult>(result.data);
-          std::strncpy(SETTINGS.recapApiKey, keyboard.text.c_str(), sizeof(SETTINGS.recapApiKey) - 1);
+          // Shown in clear while typing (a masked 50-character key cannot be checked for typos);
+          // stray spaces from the keyboard would make Google reject it.
+          const std::string key = trimmedKey(keyboard.text);
+          std::strncpy(SETTINGS.recapApiKey, key.c_str(), sizeof(SETTINGS.recapApiKey) - 1);
           SETTINGS.recapApiKey[sizeof(SETTINGS.recapApiKey) - 1] = '\0';
           SETTINGS.saveToFile();
           if (pagesToRecap >= 0 && hasRecapApiKey()) {

@@ -1,3 +1,13 @@
+## [Unreleased]
+
+### Changed
+
+- Recap: you can now load the Gemini API key from a computer instead of typing it. Save the key alone in a text file named `gemini-api-key.txt` at the root of the SD card (over USB or the Wi-Fi file transfer): the next time you open Recap, the reader imports it and deletes the file. When you type the key on the device it is now shown in clear, so you can check it, and stray spaces are removed.
+
+### Fixed
+
+- Recap: a wrong Gemini API key showed "Could not reach Gemini (ESP_ERR_NOT_SUPPORTED)" instead of saying the key is not valid. Google answers a wrong key of the newer `AQ.` type with an authentication challenge the network client cannot handle; that answer is now reported as an invalid key.
+
 ## [1.10.1] - 2026-10-04
 
 ### Fixed

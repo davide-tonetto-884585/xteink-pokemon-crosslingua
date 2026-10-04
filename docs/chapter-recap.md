@@ -26,8 +26,14 @@ pages). Longer excerpts are cut from the front, so the most recent pages are alw
 
 1. Go to [Google AI Studio](https://aistudio.google.com/apikey) and sign in with a Google account.
 2. Create an API key. The free tier needs no credit card.
-3. In the reader, choose **Recap → Gemini API key** and type the key. You can change it there at
-   any time.
+3. Put the key on the reader, in one of two ways:
+   - **From a computer (easier):** save the key alone in a text file named `gemini-api-key.txt` at
+     the root of the SD card (over USB, or with the Wi-Fi file transfer). The next time you open
+     **Recap**, the reader imports the key and deletes the file.
+   - **On the device:** choose **Recap → Gemini API key** and type it. The key is shown while you
+     type, so you can check it: a single wrong character makes Google reject it.
+
+   You can change the key at any time the same ways.
 
 If you already use **Gemini** as the Lingua translation engine, Recap uses that key until you set a
 separate one.

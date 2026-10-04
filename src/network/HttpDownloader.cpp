@@ -520,6 +520,17 @@ bool runBufferedRequest(const bool isPost, const std::string& url, const std::st
 
   const esp_err_t err = esp_http_client_perform(client);
   if (err != ESP_OK) {
+    // A 401 whose WWW-Authenticate scheme esp_http_client cannot answer (Google sends "Bearer" for a
+    // wrong key) makes perform() fail with ESP_ERR_NOT_SUPPORTED even though a complete HTTP
+    // response arrived. Report that status like any other so callers can say "invalid key".
+    const int status = esp_http_client_get_status_code(client);
+    if (status >= 400) {
+      LOG_ERR("HTTP", "Buffered request status %d (%s, %u byte body)", status, esp_err_to_name(err),
+              static_cast<unsigned>(outContent.size()));
+      outStatus = status;
+      esp_http_client_cleanup(client);
+      return false;
+    }
     LOG_ERR("HTTP", "Buffered request failed: %s", esp_err_to_name(err));
     logTlsError(client, "Buffered request");
     logNetworkState("Buffered request failure");
