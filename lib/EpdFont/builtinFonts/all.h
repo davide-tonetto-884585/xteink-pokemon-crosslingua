@@ -2,6 +2,7 @@
 
 #include <builtinFonts/ui_symbols_10.h>
 
+#if !CROSSINK_SCALABLE_FONTS
 // Built-in reading fonts retain the PHM fallback ranges but exclude emoticons.
 // Bitter's own 16 files were dropped to save flash (~600 KB estimated); LexendDeca is the sole built-in
 // reading font now (it was already this device's default reader font family,
@@ -27,6 +28,8 @@
 #include <builtinFonts/lexenddeca_16_bolditalic.h>
 #include <builtinFonts/lexenddeca_16_italic.h>
 #include <builtinFonts/lexenddeca_16_regular.h>
+
+#endif
 
 // UI fonts - no emoji or PHM variants.
 #include <builtinFonts/inter_10_bold.h>

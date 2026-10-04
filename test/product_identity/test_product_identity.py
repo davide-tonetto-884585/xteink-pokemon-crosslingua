@@ -36,13 +36,13 @@ class ProductIdentityTest(unittest.TestCase):
             REPO_ROOT / "src" / "activities" / "settings" / "SettingsActivity.cpp"
         ).read_text(encoding="utf-8")
 
-        self.assertIn(
-            'const std::string label = CROSSINK_PRODUCT_NAME " " CROSSINK_VERSION;',
-            settings,
+        build_info = (REPO_ROOT / "src" / "util" / "BuildInfo.cpp").read_text(
+            encoding="utf-8"
         )
-        self.assertNotIn(
-            'const std::string label = "CrossInk " CROSSINK_VERSION;', settings
-        )
+
+        self.assertIn("const std::string label = AppVersion::versionLabel();", settings)
+        self.assertIn('CROSSINK_PRODUCT_NAME " " CROSSINK_VERSION', build_info)
+        self.assertNotIn('"CrossInk " CROSSINK_VERSION', build_info)
 
 
 if __name__ == "__main__":

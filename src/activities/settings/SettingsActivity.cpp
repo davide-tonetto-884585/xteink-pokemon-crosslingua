@@ -21,7 +21,11 @@
 #include "ClockOffsetActivity.h"
 #include "ClockSyncActivity.h"
 #include "CrossPointSettings.h"
+#include "DeviceCapabilities.h"
 #include "FontSelectionActivity.h"
+#if CROSSINK_SCALABLE_FONTS
+#include "TtfRenderOptionsActivity.h"
+#endif
 #include "FrontlightTimePickerActivity.h"
 #include "KOReaderSettingsActivity.h"
 #include "KeyboardLayoutsActivity.h"
@@ -69,7 +73,7 @@ constexpr size_t controlsHomeButtonCount = 4;
 constexpr size_t controlsPowerMinCount = 2;
 constexpr size_t controlsPowerMaxCount = 3;
 constexpr size_t controlsFrontButtonCount = 6;
-constexpr size_t controlsSideButtonBaseCount = 3;
+constexpr size_t controlsSideButtonBaseCount = 7;
 
 void formatFrontlightScheduleTime(const uint16_t timeOfDay, char* const buf, const size_t len) {
   const FrontlightSchedule::TimeOfDay time = FrontlightSchedule::timeOfDayFromMinutes(timeOfDay);
@@ -147,7 +151,7 @@ std::string formatCompactDuration(const uint32_t seconds) {
 
 void drawSystemVersionFooter(const GfxRenderer& renderer, const int pageWidth, const int pageHeight,
                              const ThemeMetrics& metrics) {
-  const std::string label = CROSSINK_PRODUCT_NAME " " CROSSINK_VERSION;
+  const std::string label = AppVersion::versionLabel();
   const int maxWidth = pageWidth - systemVersionFooterSideMargin * 2;
   const int bottomLineY =
       pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - systemVersionFooterBottomInset;
@@ -214,8 +218,14 @@ std::string formatSettingValue(const SettingInfo& setting) {
   return std::to_string(SETTINGS.*(setting.valuePtr));
 }
 
-fui::BitmapRef twoFingerSwipeIcon(const StrId nameId) {
+fui::BitmapRef swipeActionIcon(const StrId nameId) {
   switch (nameId) {
+    case StrId::STR_LEFT_EDGE_UP:
+    case StrId::STR_RIGHT_EDGE_UP:
+      return fui::bitmapFromIcon(icon_arrow_up_24);
+    case StrId::STR_LEFT_EDGE_DOWN:
+    case StrId::STR_RIGHT_EDGE_DOWN:
+      return fui::bitmapFromIcon(icon_arrow_down_24);
     case StrId::STR_TWO_FINGER_SWIPE_UP:
       return fui::bitmapFromIcon(icon_arrows_up_24);
     case StrId::STR_TWO_FINGER_SWIPE_DOWN:
@@ -281,6 +291,7 @@ void SettingsActivity::rebuildSettingsLists() {
   controlsSideButtonSettings.clear();
   controlsTapsGesturesSettings.clear();
   controlsTwoFingerSwipeSettings.clear();
+  controlsEdgeGestureSettings.clear();
   systemSettings.clear();
   systemDeviceSettings.clear();
   systemFilesCacheSettings.clear();
@@ -315,6 +326,15 @@ void SettingsActivity::rebuildSettingsLists() {
   displayFrontlightSettings = buildDisplayFrontlightSettingsList(allSettings);
   readerSettings = buildReaderSettingsParentList(allSettings);
   readerFontSettings = buildReaderFontSettingsList(allSettings);
+#if CROSSINK_SCALABLE_FONTS
+  if (needsFonts && sdFontSystem.isScalableFamily(SETTINGS.sdFontFamilyName)) {
+    const auto fontSize =
+        std::find_if(readerFontSettings.begin(), readerFontSettings.end(),
+                     [](const SettingInfo& setting) { return setting.nameId == StrId::STR_FONT_SIZE; });
+    const auto insertAt = fontSize == readerFontSettings.end() ? readerFontSettings.end() : std::next(fontSize);
+    readerFontSettings.insert(insertAt, SettingInfo::Action(StrId::STR_TTF_RENDERING, SettingAction::TtfRendering));
+  }
+#endif
   readerPageLayoutSettings = buildReaderPageLayoutSettingsList(allSettings);
   readerScreenMarginSettings = buildReaderScreenMarginSettingsList(allSettings);
   systemSettings = buildSystemSettingsParentList(allSettings);
@@ -327,6 +347,7 @@ void SettingsActivity::rebuildSettingsLists() {
   controlsHomeButtonSettings = buildControlsHomeButtonSettingsList(allSettings);
   controlsTapsGesturesSettings = buildControlsTapsGesturesSettingsList(allSettings);
   controlsTwoFingerSwipeSettings = buildControlsTwoFingerSwipeSettingsList(allSettings);
+  controlsEdgeGestureSettings = buildControlsEdgeGestureSettingsList(allSettings);
   const size_t expectedSideButtonCount =
       controlsSideButtonBaseCount + (hasSideButtonChordSetting(allSettings) ? 1u : 0u);
 #if CROSSINK_APP_CAP_TOUCH
@@ -421,6 +442,9 @@ void SettingsActivity::setCurrentSettingsForCategory() {
         case SettingAction::ControlsTwoFingerSwipe:
           currentSettings = &controlsTwoFingerSwipeSettings;
           break;
+        case SettingAction::ControlsEdgeGestures:
+          currentSettings = &controlsEdgeGestureSettings;
+          break;
         default:
           currentSettings = &controlsSettings;
           break;
@@ -481,6 +505,8 @@ StrId SettingsActivity::activeSubmenuTitleId() const {
       return StrId::STR_TAPS_AND_GESTURES;
     case SettingAction::ControlsTwoFingerSwipe:
       return StrId::STR_TWO_FINGER_SWIPE;
+    case SettingAction::ControlsEdgeGestures:
+      return StrId::STR_EDGE_GESTURES;
     case SettingAction::SystemDevice:
       return StrId::STR_SYSTEM_DEVICE;
     case SettingAction::SystemFilesCache:
@@ -497,7 +523,11 @@ StrId SettingsActivity::activeSubmenuTitleId() const {
 void SettingsActivity::openSubmenu(SettingAction action) {
   parentSubmenu = activeSubmenu;
   activeSubmenu = action;
-  if (action == SettingAction::ReaderFontOptions) rebuildSettingsLists();
+  if (action == SettingAction::ReaderFontOptions) {
+    RenderLock lock;
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), true);
+    rebuildSettingsLists();
+  }
   setCurrentSettingsForCategory();
   selectedSettingIndex = 1;
   showSettingSelection = true;
@@ -508,11 +538,22 @@ void SettingsActivity::openSubmenu(SettingAction action) {
 }
 
 void SettingsActivity::closeSubmenu() {
+  const SettingAction closedSubmenu = activeSubmenu;
   activeSubmenu = parentSubmenu;
   parentSubmenu = SettingAction::None;
   setCurrentSettingsForCategory();
-  selectedSettingIndex = 1;
   showSettingSelection = true;
+
+  // Return the highlight to the row that opened the submenu.
+  selectedSettingIndex = 1;
+  for (int index = 0; index < settingsCount; ++index) {
+    const SettingInfo& setting = (*currentSettings)[index];
+    if (setting.type == SettingType::SUBMENU && setting.action == closedSubmenu) {
+      selectedSettingIndex = index + 1;
+      break;
+    }
+  }
+  topIndex = followListSelection(selectedSettingIndex - 1, topIndex, visibleRows, settingsCount);
 }
 
 bool SettingsActivity::currentSettingUsesOptionMenu(const SettingInfo& setting) const {
@@ -528,7 +569,7 @@ void SettingsActivity::openEnumOptionPicker(const SettingInfo& setting) {
   std::vector<std::string> options;
   options.reserve(optionCount);
   for (uint8_t i = 0; i < optionCount; i++) {
-    options.push_back(settingEnumOptionLabel(setting, i));
+    options.push_back(sideButtonOptionLabel(setting, i));
   }
 
   uint8_t currentIndex = 0;
@@ -580,7 +621,10 @@ void SettingsActivity::openScreenMarginPicker(const SettingInfo& setting) {
           StrId::STR_NONE_OPT, /*readerActivity=*/false,
           /*allowPowerAsConfirm=*/false, /*ignoreInitialConfirmRelease=*/false, /*showPercentValue=*/false,
           StrId::STR_NONE_OPT, /*overrideDisabledReaderTouchscreen=*/false, /*showTouchHeaderBackButton=*/true,
-          /*valueFormatter=*/nullptr, /*tapStep=*/5, /*useReaderSlider=*/true),
+          /*valueFormatter=*/nullptr, /*tapStep=*/5, /*useReaderSlider=*/true,
+          selectedSetting.valuePtr == &CrossPointSettings::screenMarginVertical
+              ? IntervalSelectionActivity::ReaderPreviewSetting::VerticalMargin
+              : IntervalSelectionActivity::ReaderPreviewSetting::HorizontalMargin),
       [this, selectedSetting](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.*(selectedSetting.valuePtr) = static_cast<uint8_t>(std::clamp(
@@ -600,7 +644,7 @@ void SettingsActivity::openWordSpacingPicker() {
           /*readerActivity=*/false, /*allowPowerAsConfirm=*/false, /*ignoreInitialConfirmRelease=*/false,
           /*showPercentValue=*/false, StrId::STR_NONE_OPT, /*overrideDisabledReaderTouchscreen=*/false,
           /*showTouchHeaderBackButton=*/true, /*valueFormatter=*/nullptr, /*tapStep=*/1,
-          /*useReaderSlider=*/true),
+          /*useReaderSlider=*/true, IntervalSelectionActivity::ReaderPreviewSetting::WordSpacing),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.wordSpacing =
@@ -775,10 +819,15 @@ void SettingsActivity::onExit() {
 void SettingsActivity::closeRootSettings() {
   SETTINGS.saveToFile();
   if (returnToParentOnClose) {
-    finish();
+    finishToParent();
   } else {
     onGoHome();
   }
+}
+
+void SettingsActivity::finishToParent() {
+  setResult(TtfRenderOptionsResult{ttfRenderingChanged});
+  finish();
 }
 
 void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr) {
@@ -885,7 +934,7 @@ void SettingsActivity::loop() {
   if (dismissOnUpSwipe && swipe == MappedInputManager::SwipeDir::Up) {
 #endif
     SETTINGS.saveToFile();
-    finish();
+    finishToParent();
     return;
   }
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
@@ -913,34 +962,41 @@ void SettingsActivity::loop() {
     }
     requestUpdate();
   };
-  buttonNavigator.onNextRelease([this, &moveSelection] {
-    const int next = isFileBrowserView() ? (selectedSettingIndex >= settingsCount ? 1 : selectedSettingIndex + 1)
-                                         : ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
-    moveSelection(next, true);
-  });
-  buttonNavigator.onPreviousRelease([this, &moveSelection] {
-    const int previous = isFileBrowserView() ? (selectedSettingIndex <= 1 ? settingsCount : selectedSettingIndex - 1)
-                                             : ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
-    moveSelection(previous, false);
-  });
+  const auto up = mappedInput.menuButton(MappedInputManager::Button::Up);
+  const auto down = mappedInput.menuButton(MappedInputManager::Button::Down);
+  const auto navigateRows = [this, &moveSelection](const bool forward) {
+    const int index = isFileBrowserView()
+                          ? (forward ? (selectedSettingIndex >= settingsCount ? 1 : selectedSettingIndex + 1)
+                                     : (selectedSettingIndex <= 1 ? settingsCount : selectedSettingIndex - 1))
+                          : (forward ? ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1)
+                                     : ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1));
+    moveSelection(index, forward);
+  };
+  const auto previousButtons = isFileBrowserView() ? ButtonNavigator::getPreviousButtons() : std::array{up, up};
+  const auto nextButtons = isFileBrowserView() ? ButtonNavigator::getNextButtons() : std::array{down, down};
+  buttonNavigator.onRelease(nextButtons, [&] { navigateRows(true); });
+  buttonNavigator.onRelease(previousButtons, [&] { navigateRows(false); });
 
   if (!isFileBrowserView()) {
-    buttonNavigator.onNextContinuous([this, &hasChangedCategory] {
+    buttonNavigator.onContinuous(nextButtons, [&] { navigateRows(true); });
+    buttonNavigator.onContinuous(previousButtons, [&] { navigateRows(false); });
+    const auto changeCategory = [this, &hasChangedCategory](const bool forward) {
       hasChangedCategory = true;
       showSettingSelection = true;
-      enterCategory(ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount));
+      enterCategory(forward ? ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount)
+                            : ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount));
       requestUpdate();
-    });
-
-    buttonNavigator.onPreviousContinuous([this, &hasChangedCategory] {
-      hasChangedCategory = true;
-      showSettingSelection = true;
-      enterCategory(ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount));
-      requestUpdate();
-    });
+    };
+    const auto left = mappedInput.menuButton(MappedInputManager::Button::Left);
+    const auto right = mappedInput.menuButton(MappedInputManager::Button::Right);
+    buttonNavigator.onRelease({right, right}, [&] { changeCategory(true); });
+    buttonNavigator.onRelease({left, left}, [&] { changeCategory(false); });
+    buttonNavigator.onContinuous({right, right}, [&] { changeCategory(true); });
+    buttonNavigator.onContinuous({left, left}, [&] { changeCategory(false); });
   }
 
   if (hasChangedCategory) {
+    topIndex = 0;
     selectedSettingIndex = (selectedSettingIndex == 0) ? 0 : 1;
     setCurrentSettingsForCategory();
     // Advance past any leading section headers
@@ -956,6 +1012,22 @@ void SettingsActivity::loop() {
   }
 }
 
+bool SettingsActivity::handleHomeGesture() {
+  if (optionPopup.isActive()) {
+    optionPopup.dismiss(mappedInput, [this] { requestUpdate(); });
+  } else if (!isFileBrowserView() && activeSubmenu != SettingAction::None) {
+    closeSubmenu();
+    requestUpdate();
+  } else if (!isFileBrowserView() && selectedSettingIndex > 0) {
+    selectedSettingIndex = 0;
+    showSettingSelection = true;
+    requestUpdate();
+  } else {
+    closeRootSettings();
+  }
+  return true;
+}
+
 void SettingsActivity::toggleCurrentSetting() {
   int selectedSetting = selectedSettingIndex - 1;
   if (selectedSetting < 0 || selectedSetting >= settingsCount) {
@@ -968,10 +1040,6 @@ void SettingsActivity::toggleCurrentSetting() {
 
   if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
     openSleepTimeoutPicker();
-    return;
-  }
-  if (setting.value16Ptr == &CrossPointSettings::slideshowIntervalSeconds) {
-    openSlideshowIntervalPicker();
     return;
   }
   if (setting.value16Ptr == &CrossPointSettings::frontlightScheduleStart ||
@@ -1065,6 +1133,15 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::RemapFrontButtonsReader:
         startActivityForResult(std::make_unique<ButtonRemapActivity>(renderer, mappedInput, true), resultHandler);
         break;
+      case SettingAction::DisplayStatusBar: {
+        auto activity = makeUniqueNoThrow<StatusBarSettingsActivity>(renderer, mappedInput, false, false, true);
+        if (!activity) {
+          LOG_ERR("SET", "Failed to allocate status bar settings");
+          break;
+        }
+        startActivityForResult(std::move(activity), resultHandler);
+        break;
+      }
       case SettingAction::CustomiseStatusBar:
         startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
@@ -1114,6 +1191,23 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::DownloadFonts:
         silentRestartToManageFonts();
         break;
+      case SettingAction::TtfRendering: {
+#if CROSSINK_SCALABLE_FONTS
+        auto activity =
+            makeUniqueNoThrow<TtfRenderOptionsActivity>(renderer, mappedInput, SETTINGS.sdFontFamilyName, false);
+        if (!activity) {
+          LOG_ERR("SET", "Failed to allocate TTF rendering settings");
+          break;
+        }
+        startActivityForResult(std::move(activity), [this](const ActivityResult& result) {
+          if (const auto* options = std::get_if<TtfRenderOptionsResult>(&result.data)) {
+            ttfRenderingChanged = ttfRenderingChanged || options->activeFamilyChanged;
+          }
+          rebuildSettingsLists();
+        });
+#endif
+        break;
+      }
       case SettingAction::Language:
         openLanguagePicker();
         break;
@@ -1128,11 +1222,14 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::ReaderFontOptions:
       case SettingAction::ReaderPageLayout:
+      case SettingAction::ScreenMargin:
       case SettingAction::ControlsPowerButton:
+      case SettingAction::ControlsHomeButton:
       case SettingAction::ControlsFrontButtons:
       case SettingAction::ControlsSideButtons:
       case SettingAction::ControlsTapsGestures:
       case SettingAction::ControlsTwoFingerSwipe:
+      case SettingAction::ControlsEdgeGestures:
       case SettingAction::SystemDevice:
       case SettingAction::SystemFilesCache:
       case SettingAction::SystemReadingStats:
@@ -1206,25 +1303,6 @@ void SettingsActivity::openSleepTimeoutPicker() {
       });
 }
 
-void SettingsActivity::openSlideshowIntervalPicker() {
-  startActivityForResult(
-      std::make_unique<IntervalSelectionActivity>(
-          renderer, mappedInput, "SlideshowIntervalInterval", StrId::STR_SLIDESHOW_INTERVAL,
-          SETTINGS.slideshowIntervalSeconds, CrossPointSettings::MIN_SLIDESHOW_INTERVAL_SECONDS,
-          CrossPointSettings::MAX_SLIDESHOW_INTERVAL_SECONDS, 10, 30, StrId::STR_SECONDS_VALUE_FORMAT,
-          /*readerActivity=*/false, /*allowPowerAsConfirm=*/false, /*ignoreInitialConfirmRelease=*/true,
-          /*showPercentValue=*/false, StrId::STR_NONE_OPT, /*overrideDisabledReaderTouchscreen=*/false,
-          /*showTouchHeaderBackButton=*/true, /*valueFormatter=*/nullptr, /*tapStep=*/0,
-          /*useReaderSlider=*/true),
-      [this](const ActivityResult& result) {
-        if (!result.isCancelled) {
-          SETTINGS.slideshowIntervalSeconds = static_cast<uint16_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
-        }
-        requestUpdate();
-      });
-}
-
 void SettingsActivity::openLineHeightPicker() {
   startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(
@@ -1233,7 +1311,8 @@ void SettingsActivity::openLineHeightPicker() {
           StrId::STR_NONE_OPT, /*readerActivity=*/false,
           /*allowPowerAsConfirm=*/false, /*ignoreInitialConfirmRelease=*/false, /*showPercentValue=*/true,
           StrId::STR_NONE_OPT, /*overrideDisabledReaderTouchscreen=*/false, /*showTouchHeaderBackButton=*/true,
-          /*valueFormatter=*/nullptr, /*tapStep=*/5, /*useReaderSlider=*/true),
+          /*valueFormatter=*/nullptr, /*tapStep=*/5, /*useReaderSlider=*/true,
+          IntervalSelectionActivity::ReaderPreviewSetting::LineSpacing),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.lineHeightPercent = CrossPointSettings::clampedLineHeightPercent(
@@ -1284,7 +1363,7 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
   }
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t displayIndex = enumDisplayIndexForRawValue(setting, SETTINGS.*(setting.valuePtr));
-    return settingEnumOptionLabel(setting, displayIndex);
+    return sideButtonOptionLabel(setting, displayIndex);
   }
   if (setting.type == SettingType::ENUM && setting.valueGetter) {
     return settingEnumOptionLabel(setting, setting.valueGetter());
@@ -1321,6 +1400,8 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
       fui::Insets{static_cast<int16_t>(tabTop - safe.y), 0, static_cast<int16_t>(metrics.buttonHintsHeight), 0});
 
   if (isFileBrowserView()) {
+    const int16_t listInset = static_cast<int16_t>(metrics.listInset);
+    screen.insetContent(fui::Insets{0, listInset, 0, listInset});
     screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
     visibleRows = settingsCount;
     topIndex = 0;
@@ -1332,6 +1413,7 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
       row.valueId = static_cast<int16_t>(i);
       row.labelText = screen.theme().bodyText;
       row.valueText = screen.theme().bodyText;
+      row.sidePadding = static_cast<int16_t>(metrics.listSidePadding);
       row.state = showSettingSelection && selectedSettingIndex == i + 1 ? fui::StateSelected : fui::StateNormal;
       if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
         fui::ToggleRowProps toggle;
@@ -1465,6 +1547,8 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
 
   // Settings rows. Values are built per render and owned for the draw only.
   const auto& settings = *currentSettings;
+  const std::string leftUpLabel = sideButtonGroupLabel(true);
+  const std::string rightDownLabel = sideButtonGroupLabel(false);
   std::vector<std::string> values(settings.size());
   std::vector<fui::ListItem> items;
   items.reserve(settings.size());
@@ -1472,10 +1556,14 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
     values[i] = settingValueText(settings[i]);
     const bool isSectionHeader = settings[i].type == SettingType::SECTION_HEADER;
     fui::ListItem item;
-    const fui::BitmapRef directionIcon = twoFingerSwipeIcon(settings[i].nameId);
+    const fui::BitmapRef directionIcon = swipeActionIcon(settings[i].nameId);
     const fui::BitmapRef endpointIcon = frontlightScheduleEndpointIcon(settings[i]);
     const fui::BitmapRef itemIcon = directionIcon ? directionIcon : endpointIcon;
-    item.label = isSectionHeader ? uiListSectionHeaderLabel(values[i], I18N.get(settings[i].nameId))
+    const char* sectionLabel =
+        activeSubmenu == SettingAction::ControlsSideButtons
+            ? (settings[i].nameId == StrId::STR_DIR_LEFT ? leftUpLabel.c_str() : rightDownLabel.c_str())
+            : I18N.get(settings[i].nameId);
+    item.label = isSectionHeader ? uiListSectionHeaderLabel(values[i], sectionLabel)
                                  : (directionIcon ? "" : I18N.get(settings[i].nameId));
     item.icon = itemIcon;
     if (!isSectionHeader && !values[i].empty()) item.value = values[i].c_str();
@@ -1500,6 +1588,10 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
   // File Browser, reader menus, and the other list-style screens.
   props.labelText = screen.theme().bodyText;
   props.labelText.maxLines = 2;
+  if (activeSubmenu == SettingAction::ControlsSideButtons) {
+    props.headerText = screen.theme().smallText;
+    props.headerText.bold = true;
+  }
   configureUiListSectionHeaders(props, screen.theme());
   const auto rows = configureUiList(props, screen.theme(), screen.body());
   visibleRows = rows > 0 ? rows : 1;
@@ -1518,9 +1610,9 @@ void SettingsActivity::render(RenderLock&&) {
   const char* title = isFileBrowserView() ? tr(STR_FILE_BROWSER_SETTINGS) : tr(STR_SETTINGS_TITLE);
 
   if (mappedInput.hasTouchHardware()) {
-    TouchHeaderBackButton::drawCompact(renderer, title, false, !isFileBrowserView());
+    TouchHeaderBackButton::drawCompact(renderer, title, false, false);
   } else {
-    CompactHeader::drawTitle(renderer, title, true);
+    CompactHeader::drawTitle(renderer, title);
   }
 
   uiReady = false;
@@ -1556,8 +1648,10 @@ void SettingsActivity::render(RenderLock&&) {
                  ? tr(STR_SELECT)
                  : tr(STR_TOGGLE));
 
-  const auto labels =
-      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const bool horizontalFront = !isFileBrowserView() && !deviceUsesHorizontalSideButtonsForMenus(gpio);
+  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), confirmLabel,
+                                            (horizontalFront ? tr(STR_DIR_LEFT) : tr(STR_DIR_UP)),
+                                            (horizontalFront ? tr(STR_DIR_RIGHT) : tr(STR_DIR_DOWN)));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Always use standard refresh for settings screen

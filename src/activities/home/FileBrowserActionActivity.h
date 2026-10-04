@@ -2,6 +2,7 @@
 
 #include <I18n.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,9 +28,11 @@ enum class FileBrowserAction : int {
   SendNearby = 15,
   PinBootFavorite = 16,
   UnpinBootFavorite = 17,
-  SetSlideshowFolder = 18,
-  ClearSlideshowFolder = 19,
-  Rename = 20,
+  Rename = 18,
+  ReadingStats = 19,
+  ToggleBookStatsTracking = 20,
+  SetSlideshowFolder = 21,
+  ClearSlideshowFolder = 22,
 };
 
 class FileBrowserActionActivity final : public Activity {
@@ -37,6 +40,7 @@ class FileBrowserActionActivity final : public Activity {
   struct MenuItem {
     FileBrowserAction action;
     StrId labelId;
+    std::optional<StrId> valueId;
   };
 
   FileBrowserActionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string title,
