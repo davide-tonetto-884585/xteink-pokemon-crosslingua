@@ -1,3 +1,15 @@
+## [1.7.0] - 2026-10-04
+
+### Changed
+
+- Synced the CrossInk engine to upstream v1.6.1: Library replaces Recent Books, new reader menu, reading-stats toggle, SD-card reliability fixes and more - see the `[v1.6.1]` section further down for the full upstream list.
+- The Bag lists (including TM/HM) give item names more room, so long names such as "TM45 Thunder-Wave" are no longer cut off.
+
+### Known limitations
+
+- The new Cover Grid Home theme has no Pokémon or Slideshow tab; use another Home theme to reach them.
+- Scalable (TTF) font rendering from upstream is not enabled in this firmware.
+
 ## [1.6.0] - 2026-10-02
 
 ### Changed

@@ -3776,7 +3776,15 @@ void PokemonActivity::buildList(UiApp::ScreenType& screen) {
   // ghosts under FAST e-ink refreshes, while an inverted row hides SD-backed
   // black artwork. Only the spacing differs between text and artwork rows.
   const pokemon::PokemonListPresentation presentation = pokemon::pokemonListPresentation(artRows);
-  props.sidePadding = static_cast<int16_t>(presentation.sidePadding);
+  // The item screens only draw a 32px icon (x 24-80 of the row), not the 80px
+  // species art the shared artwork padding is sized for, and the list pads both
+  // sides equally. At 112 the label got only ~240px on a 480px panel, which cut
+  // names like "TM45 Thunder-Wave" (~252px); 88 clears the icon and gives ~288px.
+  const bool itemIconRows = screen_ == Screen::BagEvolution || screen_ == Screen::BagBalls ||
+                            screen_ == Screen::BagMedicine || screen_ == Screen::BagMachine ||
+                            screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls;
+  props.sidePadding = static_cast<int16_t>(itemIconRows ? std::min(presentation.sidePadding, 88)
+                                                        : presentation.sidePadding);
   props.rowStyles = presentation.rowStyles;
   props.selectionMarker = fui::SelectionMarker::Triangle;
   props.markerInset = static_cast<int16_t>(presentation.markerInset);
