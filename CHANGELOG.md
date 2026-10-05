@@ -1,3 +1,9 @@
+## [1.11.2] - 2026-10-05
+
+### Fixed
+
+- Lingua's Interlinear mode: the small translation rows were drawn full size on top of the original lines in three more places: **Look Up Word** (dictionary word selection), the on-page **Footnotes** selector, and the sleep screen that shows your current page. These now look exactly as in the reader, only the book's own words can be selected for a lookup, and tapping a footnote number hits the right spot.
+
 ## [1.11.1] - 2026-10-05
 
 ### Added
