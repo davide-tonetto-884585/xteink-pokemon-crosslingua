@@ -1,3 +1,9 @@
+## [1.11.3] - 2026-10-05
+
+### Fixed
+
+- Lingua translations made with the **Google HTML** engine showed odd codes such as `&#39;` or `&quot;` instead of apostrophes and quotes (e.g. `dell&#39;alba`). Translations now always show the real characters, whatever the engine, and `&`, `<` and `>` in the book's text are no longer lost when translating with Google HTML. Chapters already translated with Google HTML keep the old text until they are translated again.
+
 ## [1.11.2] - 2026-10-05
 
 ### Fixed
