@@ -25,17 +25,19 @@ void RecapTextBuilder::addWord(const char* word, size_t len, const bool spaceBef
   if (endsWithInsertedHyphen && len > 0 && word[len - 1] == '-') len--;
   if (len == 0) return;
 
-  if (!text_.empty()) {
+  // last_ (not text_.back()) so the joins stay right across drain() calls.
+  if (last_ != 0) {
     if (paragraphStart) {
       trimTrailingSpaces(text_);
-      if (text_.back() != '\n') text_ += '\n';
+      if (last_ != '\n') text_ += '\n';
     } else if (lineStart_) {
-      if (!joinNextLine_ && !isSpace(text_.back())) text_ += ' ';
-    } else if (spaceBefore && !isSpace(text_.back())) {
+      if (!joinNextLine_ && !isSpace(last_)) text_ += ' ';
+    } else if (spaceBefore && !isSpace(last_)) {
       text_ += ' ';
     }
   }
   text_.append(word, len);
+  last_ = word[len - 1];
   lineStart_ = false;
   joinNextLine_ = endsWithInsertedHyphen;
 }
@@ -47,6 +49,13 @@ std::string RecapTextBuilder::take() {
   text_.clear();
   lineStart_ = true;
   joinNextLine_ = false;
+  last_ = 0;
+  return out;
+}
+
+std::string RecapTextBuilder::drain() {
+  std::string out = std::move(text_);
+  text_.clear();
   return out;
 }
 

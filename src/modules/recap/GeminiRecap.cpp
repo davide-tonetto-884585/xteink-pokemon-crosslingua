@@ -50,6 +50,155 @@ std::string buildGeminiRequestBody(const RecapRequest& request) {
   return body;
 }
 
+// ─── Book assistant ──────────────────────────────────────────────────────────
+
+namespace {
+void appendQuoted(std::string& out, const char* label, const char* value) {
+  if (!value || !value[0]) return;
+  out += label;
+  out += " \"";
+  out += value;
+  out += "\".";
+}
+
+const char* languageOrEnglish(const char* languageName) {
+  return (languageName && languageName[0]) ? languageName : "English";
+}
+}  // namespace
+
+std::string assistantInstructions(const AssistantPrompt& prompt) {
+  std::string out =
+      "You are a reading companion for a reader who is partway through a book. The user message contains "
+      "summaries of the parts of the book they have already finished, then the full text of the chapter they "
+      "are reading, from its beginning up to where they stopped, then their request.";
+  appendQuoted(out, " Book:", prompt.bookTitle);
+  out +=
+      " That material is everything the reader knows. Answer only from it: never reveal, hint at or confirm "
+      "anything that happens after the reader's position, even if you know the book. If the material does not "
+      "contain the answer, say so plainly instead of guessing. Write in ";
+  out += languageOrEnglish(prompt.languageName);
+  out += ", whatever language the book is in. Plain text only: no Markdown, no headings, no bullet symbols. ";
+  switch (prompt.task) {
+    case AssistantTask::Characters:
+      out +=
+          "List the main characters the reader has met so far, most important first, at most 12. One paragraph "
+          "per character: the name, a colon, then who they are, how they relate to the other characters and "
+          "where they stand at the reader's position. Keep each paragraph to 2-3 sentences.";
+      break;
+    case AssistantTask::Question:
+      out += "Answer the reader's question directly and concisely, in at most about 200 words.";
+      break;
+    case AssistantTask::WhoIs:
+      out +=
+          "Explain who or what the term the reader selected is (a character, place, object, group or idea) and "
+          "its role in the story up to the reader's position, in at most about 150 words. If it is a character, "
+          "mention their relationships with the other characters.";
+      break;
+  }
+  return out;
+}
+
+std::string assistantRequestLine(const AssistantPrompt& prompt) {
+  switch (prompt.task) {
+    case AssistantTask::Characters:
+      return "Request: list the main characters so far.";
+    case AssistantTask::Question: {
+      std::string line = "The reader's question: ";
+      line += prompt.subject ? prompt.subject : "";
+      return line;
+    }
+    case AssistantTask::WhoIs: {
+      std::string line = "Request: who or what is \"";
+      line += prompt.subject ? prompt.subject : "";
+      line += "\"?";
+      return line;
+    }
+  }
+  return {};
+}
+
+std::string chapterSummaryInstructions(const char* languageName, const char* bookTitle, const char* chapterTitle) {
+  std::string out = "The user message is one chapter of a book.";
+  appendQuoted(out, " Book:", bookTitle);
+  appendQuoted(out, " Chapter:", chapterTitle);
+  out +=
+      " Summarize it for a reading companion that will later answer a reader's questions about the book using "
+      "only such summaries, so keep what matters for that: every named character who appears, with who they "
+      "are and what they do; the key events in order; places; and any revelation, decision or change in a "
+      "relationship. Only use the text, do not add anything from outside it. Write in ";
+  out += languageOrEnglish(languageName);
+  out +=
+      ", plain text, no Markdown, 120 to 250 words. If the text is not story content (a title page, table of "
+      "contents, copyright or acknowledgements), answer with just the word NONE.";
+  return out;
+}
+
+std::string contextSummaryHeading(const int partNumber, const char* title) {
+  std::string out = "[Part ";
+  out += std::to_string(partNumber);
+  if (title && title[0]) {
+    out += ": ";
+    out += title;
+  }
+  out += "]\n";
+  return out;
+}
+
+std::string contextCurrentChapterHeading(const char* title, const bool startsMidChapter) {
+  std::string out = "\nThe chapter the reader is in now";
+  if (title && title[0]) {
+    out += " (\"";
+    out += title;
+    out += "\")";
+  }
+  out += startsMidChapter ? ", from partway through it up to where the reader stopped:\n\n"
+                          : ", from its beginning up to where the reader stopped:\n\n";
+  return out;
+}
+
+std::string streamingBodyPrefix(const std::string& instructions, const bool lowThinking) {
+  std::string out = "{\"systemInstruction\":{\"parts\":[{\"text\":\"";
+  appendJsonEscaped(out, instructions.data(), instructions.size());
+  out += "\"}]},";
+  if (lowThinking) out += "\"generationConfig\":{\"thinkingConfig\":{\"thinkingLevel\":\"low\"}},";
+  out += "\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"";
+  return out;
+}
+
+const char* streamingBodySuffix() { return "\"}]}]}"; }
+
+void appendJsonEscaped(std::string& out, const char* data, const size_t len) {
+  static constexpr char HEX_DIGITS[] = "0123456789abcdef";
+  for (size_t i = 0; i < len; i++) {
+    const auto c = static_cast<unsigned char>(data[i]);
+    switch (c) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        if (c < 0x20) {
+          out += "\\u00";
+          out += HEX_DIGITS[c >> 4];
+          out += HEX_DIGITS[c & 0xF];
+        } else {
+          out += static_cast<char>(c);
+        }
+    }
+  }
+}
+
 RecapParseStatus parseGeminiResponse(const std::string& json, std::string& outText) {
   outText.clear();
   JsonDocument doc;

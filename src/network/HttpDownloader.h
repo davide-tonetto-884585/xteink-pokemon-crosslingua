@@ -91,6 +91,16 @@ class HttpDownloader {
   static bool postJson(const std::string& url, const std::string& jsonBody, const std::string& authHeader,
                        std::string& outContent);
 
+  /**
+   * POST the contents of an SD-card file as the request body, streamed in small chunks so a body of
+   * hundreds of KB never has to fit in RAM (the book assistant's context). The response body is
+   * buffered into outContent (also on errors, for the API's error message). Returns true only on
+   * HTTP 200; sets lastHttpCode / lastErrorName like post().
+   */
+  static bool postFile(const std::string& url, const std::string& bodyPath, const char* contentType,
+                       const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent,
+                       int timeoutMs = 120000);
+
   // Last HTTP response code from the most recent post/postJson call. Negative values indicate
   // connection-level failures; positive values are HTTP status codes.
   static int lastHttpCode;

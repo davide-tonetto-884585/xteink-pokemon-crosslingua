@@ -87,7 +87,7 @@
 #include "modules/lingua/activities/BookTranslationActivity.h"
 #include "modules/lingua/activities/ChapterTranslationActivity.h"
 #include "modules/lingua/activities/LinguaSubmenuActivity.h"
-#include "modules/recap/ChapterRecapActivity.h"
+#include "modules/recap/BookAssistantActivity.h"
 #include "modules/recap/RecapText.h"
 
 namespace {
@@ -4497,7 +4497,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuAction action, const 
       break;
     }
     case EpubReaderMenuAction::RECAP:
-      openRecapPicker(returnToReaderMenu);
+      openBookAssistant(returnToReaderMenu);
       break;
     case EpubReaderMenuAction::AUTO_PAGE_TURN:
       openAutoPageTurnIntervalPicker(false, returnToReaderMenu);
@@ -4551,12 +4551,27 @@ void EpubReaderActivity::launchTranslation(const LinguaResult kind) {
 }
 
 namespace {
-// Excerpt sizes offered by the recap picker, in pages; 0 = the chapter up to the current page.
+// Rows of the book assistant picker (reader menu), in display order. SETTINGS.recapLengthIndex
+// remembers the last row picked (other than the API key).
+enum AssistantPick : uint8_t {
+  PICK_QUESTION,
+  PICK_WHO_IS,
+  PICK_CHARACTERS,
+  PICK_RECAP_FIRST,  // PICK_RECAP_FIRST + i is RECAP_PAGE_OPTIONS[i]
+  PICK_API_KEY = PICK_RECAP_FIRST + 5,
+};
+// Recap excerpt sizes, in pages; 0 = the chapter up to the current page.
 constexpr int RECAP_PAGE_OPTIONS[] = {3, 5, 10, 20, 0};
-constexpr uint8_t RECAP_PAGE_OPTION_COUNT = sizeof(RECAP_PAGE_OPTIONS) / sizeof(RECAP_PAGE_OPTIONS[0]);
+static_assert(PICK_API_KEY == PICK_RECAP_FIRST + sizeof(RECAP_PAGE_OPTIONS) / sizeof(RECAP_PAGE_OPTIONS[0]));
 // "Chapter so far" never loads more than this many pages: the excerpt is capped at
 // recap::MAX_INPUT_BYTES anyway, which a few dozen pages always exceed.
 constexpr int RECAP_MAX_LOADED_PAGES = 30;
+// Assistant context: the current chapter is written out from at most this many pages before the
+// reader's page. The assistant keeps only the last 120 KB, which fewer pages than this already
+// cover; the cap bounds how long the page walk below can block the reader.
+constexpr int ASSISTANT_MAX_CONTEXT_PAGES = 150;
+constexpr size_t ASSISTANT_MAX_QUESTION_CHARS = 300;
+constexpr size_t ASSISTANT_MAX_SUBJECT_CHARS = 80;
 
 // A Gemini key is ~40-55 characters: hard to type on the device. Saving it as /gemini-api-key.txt
 // on the SD card (USB or the Wi-Fi file transfer) imports it on the next Recap; the file is then
@@ -4591,12 +4606,15 @@ bool hasRecapApiKey() {
 }
 }  // namespace
 
-void EpubReaderActivity::openRecapPicker(const bool returnToReaderMenu) {
+void EpubReaderActivity::openBookAssistant(const bool returnToReaderMenu) {
   if (!epub || !section) return;
   importRecapApiKeyFromSd();
   std::vector<std::string> options;
-  options.reserve(RECAP_PAGE_OPTION_COUNT + 1);
-  char label[48];
+  options.reserve(PICK_API_KEY + 1);
+  options.emplace_back(tr(STR_ASSISTANT_ASK));
+  options.emplace_back(tr(STR_ASSISTANT_WHO_IS));
+  options.emplace_back(tr(STR_ASSISTANT_CHARACTERS));
+  char label[64];
   for (const int pages : RECAP_PAGE_OPTIONS) {
     if (pages == 0) {
       options.emplace_back(tr(STR_RECAP_CHAPTER_SO_FAR));
@@ -4606,17 +4624,18 @@ void EpubReaderActivity::openRecapPicker(const bool returnToReaderMenu) {
     }
   }
   options.emplace_back(tr(STR_RECAP_API_KEY));
-  const uint8_t selected = SETTINGS.recapLengthIndex < RECAP_PAGE_OPTION_COUNT ? SETTINGS.recapLengthIndex : 1;
+  const uint8_t selected = SETTINGS.recapLengthIndex < PICK_API_KEY ? SETTINGS.recapLengthIndex : PICK_QUESTION;
 
-  pauseReadingPaceTimer("recap_picker");
+  pauseReadingPaceTimer("assistant_picker");
   startActivityForResult(
-      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "RecapLengthSelect", StrId::STR_RECAP,
-                                                std::move(options), selected, /*readerMode=*/true,
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "BookAssistantSelect",
+                                                StrId::STR_BOOK_ASSISTANT, std::move(options), selected,
+                                                /*readerMode=*/true,
                                                 /*showTouchHeaderBackButton=*/mappedInput.hasTouchHardware()),
       [this, returnToReaderMenu](const ActivityResult& result) {
         const auto* selection = std::get_if<OptionSelectionResult>(&result.data);
         if (result.isCancelled || !selection) {
-          resumeReadingPaceTimer("recap_picker_cancel");
+          resumeReadingPaceTimer("assistant_picker_cancel");
           if (returnToReaderMenu && mappedInput.hasTouchHardware()) {
             openReaderMenu();
             return;
@@ -4624,7 +4643,7 @@ void EpubReaderActivity::openRecapPicker(const bool returnToReaderMenu) {
           requestUpdate();
           return;
         }
-        if (selection->index >= RECAP_PAGE_OPTION_COUNT) {
+        if (selection->index >= PICK_API_KEY) {
           promptRecapApiKey(-1);  // edit the key only
           return;
         }
@@ -4632,21 +4651,42 @@ void EpubReaderActivity::openRecapPicker(const bool returnToReaderMenu) {
           SETTINGS.recapLengthIndex = selection->index;
           SETTINGS.saveToFile();
         }
-        const int pages = RECAP_PAGE_OPTIONS[selection->index];
         if (!hasRecapApiKey()) {
-          promptRecapApiKey(pages);
+          promptRecapApiKey(selection->index);
           return;
         }
-        launchRecap(pages);
+        runAssistantPick(selection->index);
       });
 }
 
-void EpubReaderActivity::promptRecapApiKey(const int pagesToRecap) {
+void EpubReaderActivity::runAssistantPick(const int pick) {
+  switch (pick) {
+    case PICK_QUESTION:
+      askAssistantQuestion();
+      return;
+    case PICK_WHO_IS:
+      // Select the name/term on the page; the selection's result launches the assistant.
+      startClipSelection(nullptr, /*ignoreInitialBackRelease=*/false, /*forAssistantWhoIs=*/true);
+      return;
+    case PICK_CHARACTERS:
+      launchBookAssistant(BookAssistantActivity::Mode::Characters, std::string());
+      return;
+    default:
+      if (pick >= PICK_RECAP_FIRST && pick < PICK_API_KEY) {
+        launchRecap(RECAP_PAGE_OPTIONS[pick - PICK_RECAP_FIRST]);
+        return;
+      }
+      resumeReadingPaceTimer("assistant_pick_unknown");
+      requestUpdate();
+  }
+}
+
+void EpubReaderActivity::promptRecapApiKey(const int pendingPick) {
   startActivityForResult(
       std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, std::string(tr(STR_RECAP_API_KEY)),
                                               std::string(SETTINGS.recapApiKey), sizeof(SETTINGS.recapApiKey) - 1,
                                               InputType::Text),
-      [this, pagesToRecap](const ActivityResult& result) {
+      [this, pendingPick](const ActivityResult& result) {
         if (!result.isCancelled) {
           const auto& keyboard = std::get<KeyboardResult>(result.data);
           // Shown in clear while typing (a masked 50-character key cannot be checked for typos);
@@ -4655,8 +4695,8 @@ void EpubReaderActivity::promptRecapApiKey(const int pagesToRecap) {
           std::strncpy(SETTINGS.recapApiKey, key.c_str(), sizeof(SETTINGS.recapApiKey) - 1);
           SETTINGS.recapApiKey[sizeof(SETTINGS.recapApiKey) - 1] = '\0';
           SETTINGS.saveToFile();
-          if (pagesToRecap >= 0 && hasRecapApiKey()) {
-            launchRecap(pagesToRecap);
+          if (pendingPick >= 0 && hasRecapApiKey()) {
+            runAssistantPick(pendingPick);
             return;
           }
         }
@@ -4665,16 +4705,28 @@ void EpubReaderActivity::promptRecapApiKey(const int pagesToRecap) {
       });
 }
 
+void EpubReaderActivity::askAssistantQuestion() {
+  startActivityForResult(
+      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, std::string(tr(STR_ASSISTANT_ASK)),
+                                              std::string(), ASSISTANT_MAX_QUESTION_CHARS, InputType::Text),
+      [this](const ActivityResult& result) {
+        const std::string question =
+            result.isCancelled ? std::string() : trimmedKey(std::get<KeyboardResult>(result.data).text);
+        if (question.empty()) {
+          resumeReadingPaceTimer("assistant_question_cancel");
+          requestUpdate();
+          return;
+        }
+        launchBookAssistant(BookAssistantActivity::Mode::Question, question);
+      });
+}
+
 void EpubReaderActivity::launchRecap(const int pages) {
   if (!epub || !section) return;
-  const int spineIndex = currentSpineIndex;
   const int currentPage = section->currentPage;
 
-  ChapterRecapActivity::Excerpt excerpt;
-  excerpt.bookTitle = epub->getTitle();
-  const int tocIndex = epub->getTocIndexForSpineIndex(spineIndex);
-  if (tocIndex >= 0) excerpt.chapterTitle = epub->getTocItem(tocIndex).title;
-
+  BookAssistantActivity::Request request;
+  request.mode = BookAssistantActivity::Mode::Recap;
   {
     // Pages are read from the section file the render task also reads; hold the lock while
     // walking them.
@@ -4687,27 +4739,82 @@ void EpubReaderActivity::launchRecap(const int pages) {
       auto page = section->loadPage(pageIndex);
       if (!page) continue;
       loaded++;
-      forEachPageTextLine(*page, [&builder](const PageTextLine& line) {
-        const TextBlock& block = *line.block;
-        for (uint16_t i = 0; i < block.wordCount(); i++) {
-          builder.addWord(block.wordText(i), block.wordTextLen(i), block.wordHasSpaceBefore(i),
-                          block.wordEndsWithInsertedHyphen(i));
-        }
-        builder.endLine();
-        return true;
-      });
-      builder.endPage();
+      appendPageToRecapText(*page, builder);
     }
-    excerpt.text = builder.take();
-    const bool trimmed = recap::keepTail(excerpt.text, recap::MAX_INPUT_BYTES);
-    excerpt.startsMidChapter = firstPage > 0 || trimmed;
-    excerpt.pageCount = loaded;
+    request.excerptText = builder.take();
+    const bool trimmed = recap::keepTail(request.excerptText, recap::MAX_INPUT_BYTES);
+    request.startsMidChapter = firstPage > 0 || trimmed;
+    request.excerptPages = loaded;
   }
-  LOG_INF("RECAP", "Excerpt: spine %d, pages up to %d, %u bytes", spineIndex, currentPage,
-          static_cast<unsigned>(excerpt.text.size()));
+  LOG_INF("RECAP", "Excerpt: spine %d, pages up to %d, %u bytes", currentSpineIndex, currentPage,
+          static_cast<unsigned>(request.excerptText.size()));
+  handOffToAssistant(std::move(request));
+}
+
+void EpubReaderActivity::launchBookAssistant(const BookAssistantActivity::Mode mode, std::string subject) {
+  if (!epub || !section) return;
+  const int currentPage = section->currentPage;
+  BookAssistantActivity::Request request;
+  request.mode = mode;
+  request.subject = std::move(subject);
+
+  // The current chapter, from its start (or ASSISTANT_MAX_CONTEXT_PAGES back) to the reader's page,
+  // goes to the SD card page by page: it can be far larger than the heap the reader has left.
+  epub->setupCacheDir();
+  const std::string dir = BookAssistantActivity::assistantDir(epub->getCachePath());
+  Storage.mkdir(dir.c_str());
+  const std::string path = BookAssistantActivity::currentChapterTextPath(epub->getCachePath());
+  HalFile out;
+  if (!Storage.openFileForWrite("RECAP", path, out)) {
+    LOG_ERR("RECAP", "Could not write %s", path.c_str());
+    resumeReadingPaceTimer("assistant_context_failed");
+    requestUpdate();
+    return;
+  }
+  size_t written = 0;
+  {
+    RenderLock lock(*this);
+    drawToast(renderer, tr(STR_ASSISTANT_THINKING));
+    const int firstPage = std::max(0, currentPage - ASSISTANT_MAX_CONTEXT_PAGES + 1);
+    request.startsMidChapter = firstPage > 0;
+    recap::RecapTextBuilder builder;
+    for (int pageIndex = firstPage; pageIndex <= currentPage; pageIndex++) {
+      auto page = section->loadPage(pageIndex);
+      if (!page) continue;
+      appendPageToRecapText(*page, builder);
+      const std::string text = builder.drain();
+      written += out.write(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+    }
+  }
+  out.close();
+  LOG_INF("RECAP", "Assistant context: spine %d, pages up to %d, %u bytes", currentSpineIndex, currentPage,
+          static_cast<unsigned>(written));
+  handOffToAssistant(std::move(request));
+}
+
+void EpubReaderActivity::appendPageToRecapText(const Page& page, recap::RecapTextBuilder& builder) {
+  forEachPageTextLine(page, [&builder](const PageTextLine& line) {
+    const TextBlock& block = *line.block;
+    for (uint16_t i = 0; i < block.wordCount(); i++) {
+      builder.addWord(block.wordText(i), block.wordTextLen(i), block.wordHasSpaceBefore(i),
+                      block.wordEndsWithInsertedHyphen(i));
+    }
+    builder.endLine();
+    return true;
+  });
+  builder.endPage();
+}
+
+void EpubReaderActivity::handOffToAssistant(BookAssistantActivity::Request request) {
+  const int spineIndex = currentSpineIndex;
+  const int currentPage = section->currentPage;
+  request.spineIndex = spineIndex;
+  request.bookTitle = epub->getTitle();
+  const int tocIndex = epub->getTocIndexForSpineIndex(spineIndex);
+  if (tocIndex >= 0) request.chapterTitle = epub->getTocItem(tocIndex).title;
 
   // Same hand-off as launchTranslation(): persist the position, then tear the reader down so the
-  // recap's TLS session gets the heap. Back in the recap relaunches the reader from disk.
+  // assistant's TLS session gets the heap. Back in the assistant relaunches the reader from disk.
   const std::string epubPath = epub->getPath();
   saveProgress(spineIndex, currentPage, section->estimatedTotalPages());
   lingua.onReaderExit();
@@ -4717,7 +4824,7 @@ void EpubReaderActivity::launchRecap(const int pages) {
     section.reset();
   }
   activityManager.replaceActivity(
-      std::make_unique<ChapterRecapActivity>(renderer, mappedInput, epubPath, std::move(excerpt)));
+      std::make_unique<BookAssistantActivity>(renderer, mappedInput, epubPath, std::move(request)));
 }
 
 PageFontSet EpubReaderActivity::linguaPageFonts(const int bodyFontId) const {
@@ -4932,7 +5039,7 @@ void EpubReaderActivity::openAutoPageTurnIntervalPicker(const bool ignoreInitial
 }
 
 void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dictionaryRequest,
-                                            const bool ignoreInitialBackRelease) {
+                                            const bool ignoreInitialBackRelease, const bool forAssistantWhoIs) {
   if (!section || !epub) {
     requestUpdate();
     return;
@@ -5220,9 +5327,32 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
     return;
   }
   startActivityForResult(std::move(clipSelection), [this, bookTitle = std::move(bookTitle), author = std::move(author),
-                                                    chapterTitle = std::move(chapterTitle),
-                                                    clippingLayoutSignature](const ActivityResult& result) {
+                                                    chapterTitle = std::move(chapterTitle), clippingLayoutSignature,
+                                                    forAssistantWhoIs](const ActivityResult& result) {
     MemoryBudget::logHeapShape("clip.child_destroyed");
+    if (forAssistantWhoIs) {
+      std::string subject;
+      if (!result.isCancelled) {
+        if (const auto* clip = std::get_if<ClippingResult>(&result.data)) subject = clip->text;
+      }
+      // A name or short term: one line, trimmed, capped without splitting a UTF-8 sequence.
+      std::replace(subject.begin(), subject.end(), '\n', ' ');
+      subject = trimmedKey(subject);
+      if (subject.size() > ASSISTANT_MAX_SUBJECT_CHARS) {
+        size_t cut = ASSISTANT_MAX_SUBJECT_CHARS;
+        while (cut > 0 && (static_cast<unsigned char>(subject[cut]) & 0xC0) == 0x80) cut--;
+        subject.resize(cut);
+      }
+      releaseReaderSdFontCachesForLowMemory(renderer, "CLIP", "assistant selection exit");
+      pendingHeapShapeReaderRedrawStages.fetch_or(HEAP_SHAPE_REDRAW_CLIP, std::memory_order_relaxed);
+      if (subject.empty()) {
+        resumeReadingPaceTimer("assistant_who_is_cancel");
+        requestUpdate();
+        return;
+      }
+      launchBookAssistant(BookAssistantActivity::Mode::WhoIs, std::move(subject));
+      return;
+    }
     const char* clippingFeedback = nullptr;
     bool saved = false;
     if (!result.isCancelled) {

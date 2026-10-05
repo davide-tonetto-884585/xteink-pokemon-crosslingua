@@ -3013,7 +3013,7 @@ const char* EpubReaderDrawerActivity::rowLabel(const RowId row) const {
     case RowId::Lingua:
       return tr(STR_LINGUA);
     case RowId::Recap:
-      return tr(STR_RECAP);
+      return tr(STR_BOOK_ASSISTANT);
     case RowId::GoToPercent:
       return tr(STR_GO_TO_PERCENT);
     case RowId::GoToStablePage:

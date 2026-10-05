@@ -12,6 +12,7 @@
 #include <esp_http_client.h>
 #include <strings.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -564,6 +565,118 @@ bool HttpDownloader::post(const std::string& url, const std::string& body, const
                          &lastErrorName);
   lastHttpCode = status;
   return ok;
+}
+
+bool HttpDownloader::postFile(const std::string& url, const std::string& bodyPath, const char* contentType,
+                              const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent,
+                              const int timeoutMs) {
+  lastHttpCode = -1;
+  lastErrorName = nullptr;
+  outContent.clear();
+
+  HalFile file;
+  if (!Storage.openFileForRead("HTTP", bodyPath, file)) {
+    lastErrorName = "body file";
+    return false;
+  }
+  const size_t bodySize = file.size();
+  LOG_DBG("HTTP", "POST file (body=%u bytes)", static_cast<unsigned>(bodySize));
+
+#if defined(SIMULATOR)
+  // The host shim has no esp_http_client_write(); the host has RAM to spare, so send it buffered.
+  std::string body(bodySize, '\0');
+  const int readBytes = bodySize > 0 ? file.read(body.data(), bodySize) : 0;
+  file.close();
+  if (readBytes < 0 || static_cast<size_t>(readBytes) != bodySize) {
+    lastErrorName = "body file";
+    return false;
+  }
+  (void)timeoutMs;
+  return post(url, body, contentType, extraHeaderName, extraHeaderValue, outContent);
+#else
+  WifiPowerSaveGuard wifiPowerSaveGuard;
+  (void)wifiPowerSaveGuard;
+
+  esp_http_client_config_t config = {};
+  config.url = url.c_str();
+  config.method = HTTP_METHOD_POST;
+  config.buffer_size = HTTP_RX_BUF;
+  config.buffer_size_tx = txBufferSizeFor(url);
+  config.timeout_ms = timeoutMs;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.keep_alive_enable = false;
+
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  if (!client) {
+    file.close();
+    logNetworkState("File POST client init failure");
+    lastErrorName = "client init failed";
+    return false;
+  }
+  esp_http_client_set_header(client, "User-Agent", AppVersion::userAgent());
+  if (contentType && *contentType) esp_http_client_set_header(client, "Content-Type", contentType);
+  if (extraHeaderName && extraHeaderValue) esp_http_client_set_header(client, extraHeaderName, extraHeaderValue);
+
+  esp_err_t err = esp_http_client_open(client, static_cast<int>(bodySize));
+  if (err != ESP_OK) {
+    LOG_ERR("HTTP", "File POST open failed: %s", esp_err_to_name(err));
+    logTlsError(client, "File POST open");
+    logNetworkState("File POST open failure");
+    lastErrorName = esp_err_to_name(err);
+    esp_http_client_cleanup(client);
+    file.close();
+    return false;
+  }
+
+  constexpr size_t CHUNK = 2048;
+  char chunk[CHUNK];
+  size_t sent = 0;
+  while (sent < bodySize) {
+    const int n = file.read(chunk, std::min(CHUNK, bodySize - sent));
+    if (n <= 0) break;
+    int offset = 0;
+    while (offset < n) {
+      const int w = esp_http_client_write(client, chunk + offset, n - offset);
+      if (w <= 0) break;
+      offset += w;
+    }
+    if (offset < n) break;
+    sent += static_cast<size_t>(n);
+  }
+  file.close();
+  if (sent != bodySize) {
+    LOG_ERR("HTTP", "File POST write stopped at %u/%u bytes", static_cast<unsigned>(sent),
+            static_cast<unsigned>(bodySize));
+    logNetworkState("File POST write failure");
+    lastErrorName = "upload interrupted";
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return false;
+  }
+
+  if (esp_http_client_fetch_headers(client) < 0) {
+    LOG_ERR("HTTP", "File POST: no response headers");
+    lastErrorName = "no response";
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return false;
+  }
+  const int status = esp_http_client_get_status_code(client);
+  char rx[512];
+  while (true) {
+    const int n = esp_http_client_read(client, rx, sizeof(rx));
+    if (n <= 0) break;
+    outContent.append(rx, static_cast<size_t>(n));
+  }
+  esp_http_client_close(client);
+  esp_http_client_cleanup(client);
+  lastHttpCode = status;
+  if (status != 200) {
+    LOG_ERR("HTTP", "File POST status %d (%u byte body)", status, static_cast<unsigned>(outContent.size()));
+    return false;
+  }
+  return true;
+#endif
 }
 
 bool HttpDownloader::postJson(const std::string& url, const std::string& jsonBody, const std::string& authHeader,

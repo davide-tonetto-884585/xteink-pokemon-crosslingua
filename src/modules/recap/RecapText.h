@@ -33,11 +33,15 @@ class RecapTextBuilder {
   bool empty() const { return text_.empty(); }
   size_t size() const { return text_.size(); }
   std::string take();
+  // Hands over the text built so far but keeps the join state, so text written page by page to a
+  // file reads exactly like one take() of the whole range.
+  std::string drain();
 
  private:
   std::string text_;
   bool lineStart_ = true;
   bool joinNextLine_ = false;
+  char last_ = 0;  // last byte ever appended (0: nothing yet)
 };
 
 // Keep only the last `maxBytes` of `text`, cutting at a whitespace boundary (never inside a UTF-8

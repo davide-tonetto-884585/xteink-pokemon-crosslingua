@@ -36,7 +36,7 @@ enum class EpubReaderMenuAction : uint8_t {
   STATUS_BAR_SETTINGS,
   RESET_BOOK_READER_SETTINGS,
   LINGUA,  // CrossLingua translation submenu
-  RECAP,   // AI recap of the last pages read in the current chapter
+  RECAP,   // Book assistant (Gemini): recap, characters, questions, "who is"
 };
 
 enum class ReaderDrawerTab : uint8_t { Font = 0, Layout = 1, More = 2, Location = 3, Settings = 4, Count };
@@ -153,7 +153,7 @@ enum class ReaderDrawerCatalogItem : uint8_t {
   NearbyPositionSync,
   SendNearbyBook,
   Lingua,  // CrossLingua translation submenu
-  Recap,   // AI recap of the last pages read in the current chapter
+  Recap,   // Book assistant (Gemini): recap, characters, questions, "who is"
 };
 
 struct ReaderDrawerAvailability {

@@ -7,7 +7,10 @@
 #include <string>
 #include <vector>
 
+#include <ArduinoJson.h>
+
 #include "modules/recap/GeminiRecap.h"
+#include "modules/recap/HtmlTextExtractor.h"
 #include "modules/recap/RecapText.h"
 
 namespace {
@@ -167,6 +170,96 @@ TEST(GeminiRecap, RetriesOnlyOnAvailabilityErrors) {
   EXPECT_TRUE(recap::shouldTryNextModel(503));
   EXPECT_FALSE(recap::shouldTryNextModel(400));
   EXPECT_FALSE(recap::shouldTryNextModel(403));
+}
+
+TEST(RecapTextBuilder, DrainKeepsJoinStateAcrossChunks) {
+  recap::RecapTextBuilder b;
+  add(b, "won-", false, true);
+  b.endPage();
+  std::string out = b.drain();
+  add(b, "derful", false);
+  add(b, "day");
+  b.endPage();
+  out += b.drain();
+  add(b, "Next", false);
+  out += b.drain();
+  EXPECT_EQ(out, "wonderful day Next");
+}
+
+namespace {
+std::string extract(const std::string& html, size_t chunk = 1) {
+  std::string out;
+  recap::HtmlTextExtractor ex([&out](const char* d, size_t n) { out.append(d, n); });
+  for (size_t i = 0; i < html.size(); i += chunk) ex.feed(html.data() + i, std::min(chunk, html.size() - i));
+  ex.finish();
+  return out;
+}
+}  // namespace
+
+TEST(HtmlTextExtractor, StripsTagsAndBreaksBlocks) {
+  const std::string html =
+      "<?xml version=\"1.0\"?><!DOCTYPE html><html><head><title>T</title><style>p{x:1}</style></head>"
+      "<body><h1>Chapter <em>One</em></h1><p>Hello,\n   <b>world</b>!</p><!-- a > b --><p>Next<br/>line</p>"
+      "<script>if (a<b) {}</script></body></html>";
+  EXPECT_EQ(extract(html), "Chapter One\nHello, world!\nNext\nline");
+  EXPECT_EQ(extract(html, 7), "Chapter One\nHello, world!\nNext\nline");
+}
+
+TEST(HtmlTextExtractor, DecodesEntitiesAndKeepsBrokenOnes) {
+  EXPECT_EQ(extract("<p>a &amp; b &lt;c&gt; &#233;t&#xE9; &nbsp;x &bogus; AT&T</p>"),
+            "a & b <c> \xc3\xa9t\xc3\xa9 x &bogus; AT&T");
+}
+
+TEST(HtmlTextExtractor, IgnoresQuotedGreaterThanAndRuby) {
+  EXPECT_EQ(extract("<p title=\"a > b\">x<ruby>kan<rt>ka</rt></ruby>y</p>"), "xkany");
+}
+
+TEST(HtmlTextExtractor, CountsBytes) {
+  std::string out;
+  recap::HtmlTextExtractor ex([&out](const char* d, size_t n) { out.append(d, n); });
+  ex.feed("<p>abc</p>", 10);
+  ex.finish();
+  EXPECT_EQ(ex.textBytes(), 3u);
+}
+
+TEST(GeminiRecap, StreamingBodyIsValidJson) {
+  const std::string text = "Line \"one\"\n\ttab \\ back \x01 ctrl \xc3\xa9";
+  const std::string instructions = "Be \"careful\"";
+  std::string body = recap::streamingBodyPrefix(instructions, true);
+  // Escape in odd-sized chunks, splitting the UTF-8 sequence.
+  for (size_t i = 0; i < text.size(); i += 3) {
+    recap::appendJsonEscaped(body, text.data() + i, std::min<size_t>(3, text.size() - i));
+  }
+  body += recap::streamingBodySuffix();
+  JsonDocument doc;
+  EXPECT_FALSE(deserializeJson(doc, body));
+  EXPECT_EQ(std::string(doc["contents"][0]["parts"][0]["text"] | ""), text);
+  EXPECT_EQ(std::string(doc["systemInstruction"]["parts"][0]["text"] | ""), instructions);
+  EXPECT_EQ(std::string(doc["generationConfig"]["thinkingConfig"]["thinkingLevel"] | ""), "low");
+  EXPECT_TRUE(recap::streamingBodyPrefix("x", false).find("thinkingConfig") == std::string::npos);
+}
+
+TEST(GeminiRecap, AssistantPromptsCarryTaskLanguageAndSubject) {
+  recap::AssistantPrompt prompt;
+  prompt.task = recap::AssistantTask::WhoIs;
+  prompt.languageName = "Italiano";
+  prompt.bookTitle = "Il libro";
+  prompt.subject = "Gandalf";
+  const std::string instructions = recap::assistantInstructions(prompt);
+  EXPECT_NE(instructions.find("Write in Italiano"), std::string::npos);
+  EXPECT_NE(instructions.find("never reveal"), std::string::npos);
+  EXPECT_NE(instructions.find("\"Il libro\""), std::string::npos);
+  EXPECT_EQ(recap::assistantRequestLine(prompt), "Request: who or what is \"Gandalf\"?");
+
+  prompt.task = recap::AssistantTask::Question;
+  prompt.subject = "Perché parte?";
+  EXPECT_EQ(recap::assistantRequestLine(prompt), "The reader's question: Perché parte?");
+  prompt.task = recap::AssistantTask::Characters;
+  EXPECT_NE(recap::assistantInstructions(prompt).find("main characters"), std::string::npos);
+
+  EXPECT_NE(recap::chapterSummaryInstructions("English", "B", "C").find("NONE"), std::string::npos);
+  EXPECT_EQ(recap::contextSummaryHeading(3, "The End"), "[Part 3: The End]\n");
+  EXPECT_EQ(recap::contextSummaryHeading(1, ""), "[Part 1]\n");
 }
 
 int main() {

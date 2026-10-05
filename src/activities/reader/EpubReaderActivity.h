@@ -26,6 +26,8 @@
 #include "activities/reader/TouchReaderPreviewModel.h"
 #include "components/OptionPopup.h"
 #include "modules/lingua/reader/LinguaReaderIntegration.h"
+#include "modules/recap/BookAssistantActivity.h"
+#include "modules/recap/RecapText.h"
 
 enum class LinguaResult : uint8_t;
 #if CROSSINK_APP_CAP_TOUCH
@@ -265,12 +267,18 @@ class EpubReaderActivity final : public Activity {
   // CrossLingua: overlay modes, fallback dialog and per-page font set for translated books.
   LinguaReaderIntegration lingua;
   void launchTranslation(LinguaResult kind);
-  // Chapter recap (reader menu): excerpt-length picker, Gemini key prompt when none is set, then
-  // launchRecap() extracts the excerpt and hands off to ChapterRecapActivity. `pages` == 0 means
-  // the whole chapter up to the current page.
-  void openRecapPicker(bool returnToReaderMenu);
-  void promptRecapApiKey(int pagesToRecap);
+  // Book assistant (reader menu, Gemini): picker of question / who-is / characters / recap, the
+  // Gemini key prompt when none is set, then a hand-off to BookAssistantActivity. launchRecap()
+  // sends the last `pages` pages (0 = the chapter so far) in memory; launchBookAssistant() writes
+  // the current chapter up to this page to the SD card as the assistant's context.
+  void openBookAssistant(bool returnToReaderMenu);
+  void runAssistantPick(int pick);
+  void promptRecapApiKey(int pendingPick);
+  void askAssistantQuestion();
   void launchRecap(int pages);
+  void launchBookAssistant(BookAssistantActivity::Mode mode, std::string subject);
+  static void appendPageToRecapText(const Page& page, recap::RecapTextBuilder& builder);
+  void handOffToAssistant(BookAssistantActivity::Request request);
   PageFontSet linguaPageFonts(int bodyFontId) const;
   // The end screen owns these UI resources only while it is visible.
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
@@ -415,8 +423,10 @@ class EpubReaderActivity final : public Activity {
   void resetCurrentBookStatsAfterDelete();
   void openFileTransfer();
   void openAutoPageTurnIntervalPicker(bool ignoreInitialConfirmRelease = false, bool returnToReaderMenu = false);
+  // forAssistantWhoIs: the selection is not saved as a clipping; the selected text is sent to the
+  // book assistant as a "who is" question instead.
   void startClipSelection(const DictionaryClippingRequest* dictionaryRequest = nullptr,
-                          bool ignoreInitialBackRelease = false);
+                          bool ignoreInitialBackRelease = false, bool forAssistantWhoIs = false);
   void resetReadingPaceData();
   void captureGlobalReaderSettings();
   void restoreGlobalReaderSettings();
