@@ -39,10 +39,21 @@ void TranslationHtmlRewriter::appendEscaped(const char* s, size_t len, std::stri
   }
 }
 
-void TranslationHtmlRewriter::writeOut(const char* s, size_t len) { pendingHtml.append(s, len); }
+// Markup between blocks waits in pendingHtml because it belongs before the next batch entry. With no
+// batch pending nothing precedes it, so a large run (kept translations, tables, long non-block
+// markup) is streamed out instead of growing in RAM.
+static constexpr size_t PENDING_HTML_SPILL_BYTES = 4096;
+
+void TranslationHtmlRewriter::writeOut(const char* s, size_t len) {
+  pendingHtml.append(s, len);
+  if (batch.empty() && pendingHtml.size() >= PENDING_HTML_SPILL_BYTES) {
+    writeRaw(pendingHtml);
+    pendingHtml.clear();
+  }
+}
 
 void TranslationHtmlRewriter::writeOut(const std::string& s) {
-  if (!s.empty()) pendingHtml.append(s);
+  if (!s.empty()) writeOut(s.data(), s.size());
 }
 
 void TranslationHtmlRewriter::writeRaw(const char* s, size_t len) {
@@ -200,6 +211,7 @@ void TranslationHtmlRewriter::flushBlock(const char* endTagName) {
     entry.trimmedText = trimmed;
     batchTextBytes += trimmed.size();
   }
+  batchBufferedBytes += entry.htmlBefore.size() + entry.trimmedText.size() + blockHtml.size();
   batch.push_back(std::move(entry));
 
   LOG_DBG("HtmlRW", "Block <%s> text=%u bytes, batch=%u entries, batchBytes=%u", endTagName, (unsigned)blockText.size(),
@@ -207,7 +219,8 @@ void TranslationHtmlRewriter::flushBlock(const char* endTagName) {
 
   // Batch full: flush when the NEXT block opens rather than now, so that in fill-missing mode an
   // existing translation that immediately follows this block can still mark it as translated.
-  if (batchTextBytes >= enginePolicy->batchTargetBytes) {
+  if (batchTextBytes >= enginePolicy->batchTargetBytes || batchBufferedBytes >= MAX_BATCH_BUFFERED_BYTES ||
+      batch.size() >= MAX_BATCH_ENTRIES) {
     flushDue = true;
   }
 
@@ -305,6 +318,7 @@ void TranslationHtmlRewriter::flushBatch() {
     }
     batch.clear();
     batchTextBytes = 0;
+    batchBufferedBytes = 0;
     return;
   }
 
@@ -503,6 +517,7 @@ void TranslationHtmlRewriter::flushBatch() {
   delay(consecutiveFailures > 0 ? 2000 : 100);  // longer delay after errors to let heap recover
   batch.clear();
   batchTextBytes = 0;
+  batchBufferedBytes = 0;
   flushDue = false;
   publishLiveCounters();
 
@@ -824,6 +839,7 @@ TranslationHtmlRewriter::Result TranslationHtmlRewriter::rewrite(const char* inp
   batch.clear();
   pendingHtml.clear();
   batchTextBytes = 0;
+  batchBufferedBytes = 0;
   resetRunState();
 
   XML_Parser parser = XML_ParserCreate("UTF-8");
@@ -930,6 +946,7 @@ TranslationHtmlRewriter::Result TranslationHtmlRewriter::rewriteFromFile(
   batch.clear();
   pendingHtml.clear();
   batchTextBytes = 0;
+  batchBufferedBytes = 0;
   resetRunState();
 
   HalFile inputFile;

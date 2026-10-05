@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- Lingua: translating a chapter that was already mostly translated ("Translate missing only", "Retry missing", Translate Book on translated chapters) failed with "not enough free memory". The translator held the whole chapter in RAM until it had enough new text to send; on the X4 Pro this used up the memory before the first request. It now writes the chapter out in small pieces whatever is left to translate.
 - Recap: a wrong Gemini API key showed "Could not reach Gemini (ESP_ERR_NOT_SUPPORTED)" instead of saying the key is not valid. Google answers a wrong key of the newer `AQ.` type with an authentication challenge the network client cannot handle; that answer is now reported as an invalid key.
 
 ## [1.10.1] - 2026-10-04

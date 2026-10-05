@@ -168,6 +168,13 @@ class TranslationHtmlRewriter {
   std::vector<BatchEntry> batch;
   std::string pendingHtml;    // accumulates writeOut() calls between block flushes
   size_t batchTextBytes = 0;  // running total of trimmedText bytes in current batch
+  // Running total of every byte the batch holds (markup + text). batchTextBytes alone only counts
+  // text still to translate: in fill-missing mode a mostly-translated chapter never reaches the text
+  // target, and the whole chapter (originals + kept translations) piled up in RAM until the heap
+  // was exhausted on the X4 Pro. The batch is also flushed on these bounds.
+  size_t batchBufferedBytes = 0;
+  static constexpr size_t MAX_BATCH_BUFFERED_BYTES = 8 * 1024;
+  static constexpr size_t MAX_BATCH_ENTRIES = 32;
 
   static const char* BLOCK_TAGS[];
   static const int NUM_BLOCK_TAGS;
