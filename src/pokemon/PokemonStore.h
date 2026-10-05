@@ -39,7 +39,7 @@ class PokemonStore {
   // Looks up multiple record ids in a single forward scan of the file,
   // instead of one independent open+scan per id via readRecord() -
   // loadSnapshot()/healPartyOnRead() both used to do exactly that, once per
-  // party member (see docs/development/pokemon-gen1-audit-round3.md item
+  // party member (see round 3 audit item
   // 3.1 and round4's item 3.2). recordIds and output must be the same
   // size - returns false (no writes at all) otherwise. A requested id of 0,
   // or one that doesn't exist in the file, leaves that slot's output entry

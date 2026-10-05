@@ -32,7 +32,7 @@ pio run -e pokemon-x3
 
 Use the `pokemon-x3` environment specifically (not `default`) — only this environment sets the `CROSSINK_ENABLE_POKEMON` flag.
 
-Flash/RAM numbers print at the end of the build log (`RAM:`, `Flash:` %). If the build fails from exceeding the partition size, see the size-constraint section of the [Pokémon Battle Roadmap](./pokemon-battle-roadmap.md).
+Flash/RAM numbers print at the end of the build log (`RAM:`, `Flash:` %). If the build fails from exceeding the partition size, the change just made has pushed the firmware past its flash partition.
 
 ## Step 3 — Get the firmware file
 
@@ -66,12 +66,11 @@ On the X3: **Settings → System → SD Card Firmware Update** → select the `f
 
 ## Safety notes
 
-- **Back up before flashing an unfamiliar build for the first time**: save copies of `/.crosspoint/pokemon-a.bin` and `pokemon-b.bin` first, just in case — even though the save-format changes on this branch (see the [Pokémon Battle Roadmap](./pokemon-battle-roadmap.md)) were designed to stay backward-compatible with older saves.
+- **Back up before flashing an unfamiliar build for the first time**: save copies of `/.crosspoint/pokemon-a.bin` and `pokemon-b.bin` first, just in case — even though the save-format changes on this branch were designed to stay backward-compatible with older saves.
 - If the firmware crashes, the X3 automatically writes a crash report to the SD-card root (no USB required) — check that log file if something goes wrong after flashing.
 - During stages where no UI yet uses a given new feature, flashing that build will **look and behave identically** to the previous one — there's nothing new to "see" on screen yet. This step only confirms "the firmware flashes, doesn't crash, and the save isn't corrupted" — it is not yet the step for trying out the new feature. Check the roadmap to see which stage first has UI for a given feature.
 
 ## See also
 
 - [Getting Started](./getting-started.md) — installing PlatformIO, building for other environments
-- [Pokémon Battle Roadmap](./pokemon-battle-roadmap.md) — progress, technical constraints, remaining work
 - [docs/installation.md](../installation.md) — the official update process for end users (pre-packaged release build)

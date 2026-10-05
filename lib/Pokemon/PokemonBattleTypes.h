@@ -71,8 +71,7 @@ struct BaseStats {
   // project's own simplified EV model deliberately borrows the modern
   // games' small per-species yield table instead of Gen 1's own formula, the
   // same way it already rejected Gen 1's real battle-XP formula as
-  // oversized for this game's pace. See
-  // docs/development/pokemon-iv-ev-plan.md.
+  // oversized for this game's pace.
   uint8_t evHp;
   uint8_t evAttack;
   uint8_t evDefense;

@@ -55,3 +55,4 @@ dist-publish/
 
 # PokeAPI response cache for scripts/fetch_pokemon_battle_data.py
 /scripts/.pokeapi-cache/
+lib/ScalableFont/*.generated.h

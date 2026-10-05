@@ -757,8 +757,7 @@ void ivAndEvRaiseStatsAboveTheZeroBaseline() {
 }
 
 void evBonusMatchesTheFlatDivideByFourFormula() {
-  // ev/4 exactly, not the real Gen 1 sqrt(ev)/4 curve - see
-  // docs/development/pokemon-iv-ev-plan.md. 100/4=25, 255/4=63 (both floored).
+  // ev/4 exactly, not the real Gen 1 sqrt(ev)/4 curve. 100/4=25, 255/4=63 (both floored).
   CHECK(pokemon::battleWorkingStat(50, 100, 0, 100) == static_cast<uint16_t>((2U * 50U + 25U) * 100U / 100U + 5U));
   CHECK(pokemon::battleWorkingStat(50, 100, 0, 255) == static_cast<uint16_t>((2U * 50U + 63U) * 100U / 100U + 5U));
 }
@@ -1287,7 +1286,7 @@ void mistAndFocusEnergySetTheirOwnFields() {
   // per-Pokemon, correctly ending on a switch). Mist gets its OWN field
   // (mistActive), deliberately separate from guardSpecActive, since Mist -
   // unlike Guard Spec. itself - protects the whole SIDE and must survive a
-  // switch (docs/development/pokemon-gen1-audit-round6.md item 2.5).
+  // switch (round 6 audit item 2.5).
   BattleCombatant bulbasaurMist = makeCombatant(1, 20, {54});  // Mist
   BattleCombatant dummy1 = makeCombatant(4, 20, {45});
   pokemon::stepBattle(bulbasaurMist, dummy1, 0, ZERO_RANDOM);

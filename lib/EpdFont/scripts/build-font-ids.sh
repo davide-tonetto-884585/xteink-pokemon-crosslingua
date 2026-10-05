@@ -31,8 +31,7 @@ emit_hash_define LEXENDDECA_14_FONT_ID \
   ./lexenddeca_14_regular.h ./lexenddeca_14_bold.h ./lexenddeca_14_bolditalic.h ./lexenddeca_14_italic.h
 emit_hash_define LEXENDDECA_16_FONT_ID \
   ./lexenddeca_16_regular.h ./lexenddeca_16_bold.h ./lexenddeca_16_bolditalic.h ./lexenddeca_16_italic.h
-# Bitter was dropped to save flash (see TASKS.md's "Font tích hợp đọc sách"
-# note) - its builtinFonts/*.h files no longer exist, so no BITTER_*_FONT_ID
+# Bitter was dropped to save flash - its builtinFonts/*.h files no longer exist, so no BITTER_*_FONT_ID
 # is emitted anymore.
 
 # UI fonts

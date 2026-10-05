@@ -1516,7 +1516,7 @@ void PokemonActivity::setupBattleOpponent(const uint16_t speciesId, const uint8_
   // the outgoing opponent Pokemon (fainted, or an AI voluntarily switching
   // mid-battle - a real mechanic since v0.17.0) was holding the player in a
   // partial trap, switching it out releases that trap immediately - see
-  // docs/development/pokemon-gen1-audit-round6.md item 2.4. A no-op the
+  // round 6 audit item 2.4. A no-op the
   // first time this runs for a fresh battle (nothing has trapped anyone yet).
   if (battleOpponent_.forcedMoveId != 0 && pokemon::isPartialTrapMove(battleOpponent_.forcedMoveId)) {
     battlePlayer_.trappedTurnsRemaining = 0;
@@ -1526,7 +1526,7 @@ void PokemonActivity::setupBattleOpponent(const uint16_t speciesId, const uint8_
   // these protect the opponent's whole SIDE and must survive the opponent
   // trainer sending out its next team member mid-battle, but must not leak
   // in from a previous, already-concluded battle when a fresh one starts -
-  // see docs/development/pokemon-gen1-audit-round6.md item 2.5.
+  // see round 6 audit item 2.5.
   const bool carryReflect = preserveSideEffects && battleOpponent_.reflectActive;
   const bool carryLightScreen = preserveSideEffects && battleOpponent_.lightScreenActive;
   const bool carryMist = preserveSideEffects && battleOpponent_.mistActive;
@@ -3793,7 +3793,15 @@ void PokemonActivity::buildList(UiApp::ScreenType& screen) {
   // ghosts under FAST e-ink refreshes, while an inverted row hides SD-backed
   // black artwork. Only the spacing differs between text and artwork rows.
   const pokemon::PokemonListPresentation presentation = pokemon::pokemonListPresentation(artRows);
-  props.sidePadding = static_cast<int16_t>(presentation.sidePadding);
+  // The item screens only draw a 32px icon (x 24-80 of the row), not the 80px
+  // species art the shared artwork padding is sized for, and the list pads both
+  // sides equally. At 112 the label got only ~240px on a 480px panel, which cut
+  // names like "TM45 Thunder-Wave" (~252px); 88 clears the icon and gives ~288px.
+  const bool itemIconRows = screen_ == Screen::BagEvolution || screen_ == Screen::BagBalls ||
+                            screen_ == Screen::BagMedicine || screen_ == Screen::BagMachine ||
+                            screen_ == Screen::BattleBag || screen_ == Screen::BattleBalls;
+  props.sidePadding = static_cast<int16_t>(itemIconRows ? std::min(presentation.sidePadding, 88)
+                                                        : presentation.sidePadding);
   props.rowStyles = presentation.rowStyles;
   props.selectionMarker = fui::SelectionMarker::Triangle;
   props.markerInset = static_cast<int16_t>(presentation.markerInset);

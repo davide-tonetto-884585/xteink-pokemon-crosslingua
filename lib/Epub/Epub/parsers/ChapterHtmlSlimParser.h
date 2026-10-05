@@ -40,6 +40,7 @@ class ChapterHtmlSlimParser {
   static constexpr uint16_t MAX_SIMPLE_TABLE_CELL_WORDS = 160;
   static constexpr uint8_t TABLE_CELL_PADDING = 6;
   static constexpr size_t MAX_INLINE_STYLE_DEPTH = 64;
+  static constexpr size_t MAX_PENDING_INLINE_IMAGES = 16;
   static constexpr size_t MAX_BLOCK_STYLE_DEPTH = 16;
 
   Epub* epub;
@@ -63,6 +64,8 @@ class ChapterHtmlSlimParser {
   uint32_t partWordVisibleOffset = 0;
   uint32_t visibleTextOffset = 0;
   uint32_t partWordReferenceOffset = 0;
+  int16_t partWordInlinePadding = 0;
+  int16_t pendingInlinePadding = 0;
   uint32_t referenceTextOffset = 0;
   bool referenceTextStarted = false;
   bool referenceWhitespacePending = false;
@@ -82,6 +85,10 @@ class ChapterHtmlSlimParser {
   uint32_t currentPageReferenceOffset = 0;
   bool currentPageVisibleOffsetSet = false;
   int fontId;
+  uint16_t rootFontScale = 256;
+  std::array<int, MAX_BLOCK_STYLE_DEPTH> blockStyleDepths_{};
+  int currentTextFontId() const;
+  void applyBlockFontSize(const CssStyle& cssStyle, const char* tag, BlockStyle& style);
   float lineCompression;
   bool extraParagraphSpacing;
   bool forceParagraphIndents;
@@ -98,6 +105,12 @@ class ChapterHtmlSlimParser {
   std::string contentBase;
   std::string imageBasePath;
   int imageCounter = 0;
+  struct PendingInlineImage {
+    uint16_t id;
+    std::unique_ptr<ImageBlock> block;
+  };
+  std::vector<PendingInlineImage> pendingInlineImages;
+  uint16_t nextInlineImageId = 1;
   bool lowMemoryImageFallback = false;
   bool lowMemoryAbort = false;
   bool attemptedTextLayoutFontCacheRelease = false;
@@ -304,7 +317,8 @@ class ChapterHtmlSlimParser {
   LineFontRole currentLineRole() const;
   // The font id a role is MEASURED and ADVANCED with (same resolver the renderer uses).
   int fontIdForRole(const LineFontRole role) const {
-    return PageFontSet(fontId, translationFontId, annotationFontId).forRole(role);
+    // Body text follows the block's own (possibly CSS-scaled) size, like currentTextFontId().
+    return PageFontSet(currentTextFontId(), translationFontId, annotationFontId).forRole(role);
   }
   // Deliver every anchor still pending for the block just laid out to the page currently being built.
   void flushPendingFootnotesToCurrentPage();
@@ -346,7 +360,8 @@ class ChapterHtmlSlimParser {
   int linguaLineHeight(int lineFontId) const;
   // Lingua: route a flushed block through the pairing builder that owns the active layout.
   void makePagesForLayout();
-  void flushLongTextRunIfNeeded(bool force = false);
+  void queueInlinePadding(const CssStyle& cssStyle);
+  void flushLongTextRunIfNeeded(bool force = false, bool flushLastLine = false);
   size_t bufferedWordsBeforeLayoutLimit() const;
   uint16_t textRunBytesBeforeLayoutLimit() const;
   void markCurrentPageFromCurrentTextBlock();
@@ -366,6 +381,7 @@ class ChapterHtmlSlimParser {
   bool isLightMode() const { return renderMode == EpubRenderMode::Light; }
   bool honorsPublisherDecorations() const { return renderMode != EpubRenderMode::Light; }
   void pushCssAncestor(int depth, const char* tag, std::string_view classAttr);
+  void pushBlockFontStyle(const CssStyle& cssStyle);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applySmallCapsToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);

@@ -298,10 +298,8 @@ class PokemonService {
   // nothing) if speciesId is invalid.
   Gender rollGenderFor(uint16_t speciesId);
   // A fresh, unpersisted IV roll for a wild encounter's own BattleCombatant
-  // at fight time - only becomes permanent (via ensureIvEv(), rolled
-  // independently) if the catch succeeds. See
-  // docs/development/pokemon-iv-ev-plan.md for why these two rolls are
-  // deliberately not the same one. `shiny` selects rollShinyIvSet() (12-15
+  // at fight time - a successful catch keeps it (resolveEncounter()'s
+  // `battleIvs`). `shiny` selects rollShinyIvSet() (12-15
   // per stat) instead of the normal 0-15 roll.
   std::array<uint8_t, STAT_COUNT> rollWildIv(bool shiny = false);
   // Grants battleVictoryXp(opponentLevel, isTrainerBattle) to recordId (the

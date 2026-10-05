@@ -31,10 +31,9 @@ class Stats:
     # EV yield: how much of each stat's Effort Value a Pokemon of this species
     # grants when defeated - PokeAPI's own per-species "effort" field (a
     # small 0-3 integer per stat), the same modern-games EV-yield table this
-    # project's own simplified EV model already deviates toward (see
-    # docs/development/pokemon-iv-ev-plan.md - real Gen 1 didn't have a
-    # per-species yield table at all, it accumulated "Stat Experience"
-    # directly from the defeated Pokemon's base stats).
+    # project's own simplified EV model already deviates toward (real Gen 1
+    # didn't have a per-species yield table at all, it accumulated "Stat
+    # Experience" directly from the defeated Pokemon's base stats).
     ev_hp: int
     ev_attack: int
     ev_defense: int

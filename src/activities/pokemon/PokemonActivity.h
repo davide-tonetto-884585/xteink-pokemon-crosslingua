@@ -132,7 +132,7 @@ class PokemonActivity final : public Activity {
   // fresh-battle-start call site (enterBattle()/enterGymBattle()), where
   // whatever is sitting in battlePlayer_/battleOpponent_ is stale leftover
   // state from a previous, already-concluded battle and must NOT carry
-  // forward - see docs/development/pokemon-gen1-audit-round6.md item 2.5.
+  // forward - see round 6 audit item 2.5.
   bool setupBattlePlayer(int slot, bool preserveSideEffects = false);
   void setupBattleOpponent(uint16_t speciesId, uint8_t level, std::span<const uint8_t> fixedMoves = {},
                            pokemon::Gender gender = pokemon::Gender::Unknown, bool isShiny = false,
@@ -155,7 +155,7 @@ class PokemonActivity final : public Activity {
   void finishBattleAfterPlayerFainted();
   // playerAlsoFainted: the exchange that produced this win also left the
   // player's own active Pokemon at 0 HP (a mutual KO the player caused - see
-  // docs/development/pokemon-gen1-audit-round4.md bug 2.9). Only ever true
+  // round 4 audit bug 2.9). Only ever true
   // when called from finishBattleAfterWildFainted()'s gym path - the
   // Whirlwind/Roar-forced-switch call site can't produce a fainted attacker.
   void advanceGymOpponentOrFinish(bool playerAlsoFainted = false);

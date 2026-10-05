@@ -39,7 +39,7 @@ bool writeExact(FsFile& file, const void* input, const size_t size) { return fil
 // loop below used to issue one 48-byte read (or write) per record, which on
 // a large save is thousands of individual SD-card transactions for a single
 // operation (see the "batched save I/O" performance note in
-// docs/development/pokemon-gen1-audit-round2.md, item 3.2). The caller must
+// round 2 audit, item 3.2). The caller must
 // pass the exact number of records it intends to read (recordCount from the
 // header, never "however many bytes happen to be left in the file") -
 // requesting more than that would read past the record region into the
