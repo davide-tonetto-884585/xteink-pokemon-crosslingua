@@ -1,8 +1,12 @@
-## [Unreleased]
+## [1.11.1] - 2026-10-05
 
 ### Added
 
 - **Book assistant** (reader menu, More tab; it replaces the Recap entry and keeps the recap): besides recapping the last pages, Google Gemini can now list the **main characters** you have met so far, answer a **question** you type, and explain **who is...?** a name or term you select on the page. These answers use the whole book up to your page: the full text of the current chapter plus a short summary of every earlier chapter. The summaries are made once per chapter the first time you use the assistant on a book (a progress screen shows them; Back cancels and keeps the ones already done) and are saved on the SD card, so later questions are quick. Answers never use anything after your page. After an answer, press Confirm on the last page to ask another question. See [docs/book-assistant.md](docs/book-assistant.md). English and Italian only for now.
+
+### Fixed
+
+- Text selection (Save clipping, and Book assistant → Who is...?) in Lingua's Interlinear mode: the small translation rows were redrawn full size on top of the original lines, so the page became unreadable while selecting, and the cursor could land on a translation word. The page now looks exactly as in the reader, and only the book's own words can be selected. Interlinear translation rows are also no longer sent to Gemini as part of the book text.
 
 ## [1.11.0] - 2026-10-05
 
