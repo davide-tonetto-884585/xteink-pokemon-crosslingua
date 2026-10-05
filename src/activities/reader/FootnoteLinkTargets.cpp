@@ -6,8 +6,8 @@
 #include <algorithm>
 
 FootnoteLinkTargets buildFootnoteLinkTargets(const Page& page, const std::vector<FootnoteEntry>& footnotes,
-                                             const GfxRenderer& renderer, const int fontId, const int marginTop,
-                                             const int marginLeft) {
+                                             const GfxRenderer& renderer, const PageFontSet& fonts,
+                                             const int marginTop, const int marginLeft) {
   FootnoteLinkTargets targets{};
   if (footnotes.empty()) return targets;
 
@@ -17,7 +17,7 @@ FootnoteLinkTargets buildFootnoteLinkTargets(const Page& page, const std::vector
     if (!line.getBlock()) continue;
 
     const auto& block = *line.getBlock();
-    const int lineFontId = block.resolvedFontId(renderer, fontId);
+    const int lineFontId = block.resolvedFontId(renderer, fonts.forRole(line.fontRole));
     const int lineHeight =
         block.getBlockStyle().lineHeight ? block.getBlockStyle().lineHeight : renderer.getLineHeight(lineFontId);
     for (uint16_t wordIndex = 0; wordIndex < block.wordCount(); ++wordIndex) {

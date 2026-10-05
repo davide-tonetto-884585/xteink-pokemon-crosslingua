@@ -198,7 +198,7 @@ bool DictionaryWordSelectActivity::buildWorkingSet(const bool consumeInitialConf
   navigator.setTouchDragCursorVisible(mappedInput.hasTouch());
   bool initialTouchHit = false;
   if (initialTouchX_ >= 0 && initialTouchY_ >= 0) {
-    navigator.selectWordAtPoint(initialTouchX_, initialTouchY_, renderer.getLineHeight(SETTINGS.getReaderFontId()),
+    navigator.selectWordAtPoint(initialTouchX_, initialTouchY_, renderer.getLineHeight(pageFonts_.body),
                                 &initialTouchHit);
   }
   if (autoLookupInitialWord_) {
@@ -224,7 +224,7 @@ void DictionaryWordSelectActivity::suspendWorkingSet() {
   if (workingSetSuspended_ || !readerPageLoad_) return;
   if (const auto* selected = navigator.getSelected()) {
     suspendedSelectionX_ = selected->screenX + selected->width / 2;
-    suspendedSelectionY_ = selected->screenY + renderer.getLineHeight(SETTINGS.getReaderFontId()) / 2;
+    suspendedSelectionY_ = selected->screenY + renderer.getLineHeight(pageFonts_.body) / 2;
   }
   navigator.releaseWorkingSet();
   workingSet_.clear();
@@ -240,7 +240,7 @@ void DictionaryWordSelectActivity::onExit() {
   Dictionary::clearLookupDictPathOverride();
   mappedInput.setReaderTouchscreenOverride(false);
   const auto& sdFonts = renderer.getSdCardFonts();
-  auto it = sdFonts.find(SETTINGS.getReaderFontId());
+  auto it = sdFonts.find(pageFonts_.body);
   if (it != sdFonts.end()) it->second->clearPersistentCache();
   Activity::onExit();
 }
@@ -254,11 +254,12 @@ void DictionaryWordSelectActivity::prewarmHighlightGlyphs(int currIdx) {
   if (w->focusBoundary > 0) {
     styleMask |= styleToBitMask(static_cast<EpdFontFamily::Style>(w->style | EpdFontFamily::BOLD));
   }
-  fcm->prewarmCache(SETTINGS.getReaderFontId(), navigator.getDisplay(*w), styleMask);
+  // The word's own (role-resolved) font: Lingua translation lines may draw in a smaller face.
+  fcm->prewarmCache(w->fontId, navigator.getDisplay(*w), styleMask);
 }
 
 void DictionaryWordSelectActivity::prebuildAdvanceTable() {
-  if (!renderer.isSdCardFont(SETTINGS.getReaderFontId())) return;
+  if (!renderer.isSdCardFont(pageFonts_.body)) return;
 
   // A page can contain hundreds of distinct glyphs, so this 2 KB collector is
   // too large for the render-task stack. Allocate it fallibly and release it
@@ -304,8 +305,8 @@ void DictionaryWordSelectActivity::prebuildAdvanceTable() {
     // Use the codepoint overload so prewarm itself has no growing std::string.
     // RTL presentation forms that are absent here still use the normal
     // fallible on-demand font path during measurement.
-    renderer.ensureSdCardFontReady(SETTINGS.getReaderFontId(), codepointData, codepointCount,
-                                   /*includeSpace=*/true, /*includeHyphen=*/true, pageStyleMask);
+    renderer.ensureSdCardFontReady(pageFonts_.body, codepointData, codepointCount, /*includeSpace=*/true,
+                                   /*includeHyphen=*/true, pageStyleMask);
   }
 }
 
@@ -350,9 +351,9 @@ void DictionaryWordSelectActivity::renderDefinitionBackground() {
   // table only preserves glyph widths, not the bitmaps themselves.
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  backgroundPage->render(renderer, SETTINGS.getReaderFontId(), marginLeft, marginTop, foregroundBlack);  // scan pass
+  backgroundPage->render(renderer, pageFonts_, marginLeft, marginTop, foregroundBlack);  // scan pass
   scope.endScanAndPrewarm();
-  backgroundPage->render(renderer, SETTINGS.getReaderFontId(), marginLeft, marginTop, foregroundBlack);
+  backgroundPage->render(renderer, pageFonts_, marginLeft, marginTop, foregroundBlack);
 }
 
 void DictionaryWordSelectActivity::renderDefinitionBackgroundCallback(void* context) {
@@ -378,9 +379,11 @@ bool DictionaryWordSelectActivity::allocateWorkingSet() {
   forEachPageTextLine(*page, [&](const PageTextLine& line) {
     const auto* block = line.block;
     if (!block) return true;
-    const int16_t screenY = static_cast<int16_t>(
-        line.yPos + marginTop +
-        block->getRubyShift(renderer.getFontAscenderSize(block->resolvedFontId(renderer, SETTINGS.getReaderFontId()))));
+    // Interlinear annotation rows are never selectable (see extractWords()); budget only what it keeps.
+    if (line.fontRole == LineFontRole::Annotation) return true;
+    const int lineFontId = block->resolvedFontId(renderer, pageFonts_.forRole(line.fontRole));
+    const int16_t screenY =
+        static_cast<int16_t>(line.yPos + marginTop + block->getRubyShift(renderer.getFontAscenderSize(lineFontId)));
     for (uint16_t wordIndex = 0; wordIndex < block->wordCount(); ++wordIndex) {
       const char* word = block->wordText(wordIndex);
       const size_t wordLength = block->wordTextLen(wordIndex);
@@ -445,7 +448,7 @@ bool DictionaryWordSelectActivity::allocateWorkingSet() {
       heap.freeHeap <
           totalBytes + std::min(WORD_SELECT_ALLOCATION_HEADROOM, std::numeric_limits<size_t>::max() - totalBytes)) {
     const auto before = heap;
-    if (renderer.releaseSdCardFontForLowMemory(SETTINGS.getReaderFontId())) {
+    if (renderer.releaseSdCardFontForLowMemory(pageFonts_.body)) {
       heap = MemoryBudget::snapshot();
       LOG_DBG("DICT", "Released reader SD-font caches for %u-byte working set: free=%u->%u maxAlloc=%u->%u",
               static_cast<unsigned>(totalBytes), before.freeHeap, heap.freeHeap, before.maxAllocHeap,
@@ -572,7 +575,8 @@ bool DictionaryWordSelectActivity::extractWords() {
   return forEachPageTextLine(*page, [&](const PageTextLine& line) {
     const auto* block = line.block;
     if (!block) return true;
-    const int lineFontId = block->resolvedFontId(renderer, SETTINGS.getReaderFontId());
+    // Lingua lays some lines out in other fonts (translations, interlinear annotation rows).
+    const int lineFontId = block->resolvedFontId(renderer, pageFonts_.forRole(line.fontRole));
     const int16_t naturalSpaceWidth =
         static_cast<int16_t>(renderer.getTextAdvanceX(lineFontId, " ", EpdFontFamily::REGULAR));
 
@@ -612,6 +616,13 @@ bool DictionaryWordSelectActivity::extractWords() {
         continue;
       }
       const uint16_t sourcePageWordOrdinal = pageWordOrdinal++;
+      // Interlinear annotation rows are reader-inserted glosses, not book text: they stay on screen
+      // but are not selectable. They still take their ordinal above, so ordinals match the reader's
+      // other per-page word walks (clip selection).
+      if (line.fontRole == LineFontRole::Annotation) {
+        lastSelectableWordIndex = -2;
+        continue;
+      }
       const int16_t screenX = static_cast<int16_t>(line.xPos + sourceGeometry.xOffset + marginLeft);
       const int16_t screenY = static_cast<int16_t>(line.yPos + marginTop + rubyShift);
 
@@ -795,8 +806,8 @@ bool DictionaryWordSelectActivity::selectFirstWordForTouchDrag() {
   if (!first) return false;
   bool hit = false;
   navigator.selectWordAtPoint(first->screenX + first->width / 2,
-                              first->screenY + renderer.getLineHeight(SETTINGS.getReaderFontId()) / 2,
-                              renderer.getLineHeight(SETTINGS.getReaderFontId()), &hit);
+                              first->screenY + renderer.getLineHeight(pageFonts_.body) / 2,
+                              renderer.getLineHeight(pageFonts_.body), &hit);
   return hit && navigator.beginTouchMultiSelect();
 }
 
@@ -1083,7 +1094,7 @@ void DictionaryWordSelectActivity::loop() {
           touchDragHasMoved_ || ClipSelectionPaging::hasDraggedFrom(touchDragStartX_, touchDragStartY_, dragX, dragY);
       const int previousIdx = navigator.getCurrentFlatIndex();
       bool hit = false;
-      if (navigator.selectWordAtPoint(dragX, dragY, renderer.getLineHeight(SETTINGS.getReaderFontId()), &hit)) {
+      if (navigator.selectWordAtPoint(dragX, dragY, renderer.getLineHeight(pageFonts_.body), &hit)) {
         requestUpdate();
       } else if (hit && touchDragHasMoved_ && navigator.getCurrentFlatIndex() == previousIdx &&
                  navigator.getWordAt(previousIdx + 1) == nullptr && continueTouchSelectionOnNextPage()) {
@@ -1104,7 +1115,7 @@ void DictionaryWordSelectActivity::loop() {
   if (mappedInput.wasScreenTouchDown(touchX, touchY)) {
     resetCrossPageSelection();
     bool touchedWord = false;
-    navigator.selectWordAtPoint(touchX, touchY, renderer.getLineHeight(SETTINGS.getReaderFontId()), &touchedWord);
+    navigator.selectWordAtPoint(touchX, touchY, renderer.getLineHeight(pageFonts_.body), &touchedWord);
     if (touchedWord && navigator.beginTouchMultiSelect()) {
       touchDragLookup_ = true;
       touchDragHasMoved_ = false;
@@ -1144,7 +1155,7 @@ void DictionaryWordSelectActivity::loop() {
 }
 
 void DictionaryWordSelectActivity::render(RenderLock&&) {
-  const int lineHeight = renderer.getLineHeight(SETTINGS.getReaderFontId());
+  const int lineHeight = renderer.getLineHeight(pageFonts_.body);
   const int currIdx = navigator.getCurrentFlatIndex();
   const bool foregroundBlack = ReaderUtils::readerForegroundBlack();
 
@@ -1242,9 +1253,9 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
   // Same pattern as EpubReaderActivity::renderContents().
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  page->render(renderer, SETTINGS.getReaderFontId(), marginLeft, marginTop, foregroundBlack);  // scan pass
+  page->render(renderer, pageFonts_, marginLeft, marginTop, foregroundBlack);  // scan pass
   scope.endScanAndPrewarm();
-  page->render(renderer, SETTINGS.getReaderFontId(), marginLeft, marginTop, foregroundBlack);
+  page->render(renderer, pageFonts_, marginLeft, marginTop, foregroundBlack);
 
   // Set up snapshot AND draw the highlight via the differential entry point with
   // prevWordIdx = -1 (no previous highlight to wipe). This both draws the highlight

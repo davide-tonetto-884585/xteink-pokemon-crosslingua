@@ -158,7 +158,7 @@ void EpubReaderFootnoteSelectActivity::render(RenderLock&&) {
   if (auto* fcm = renderer.getFontCacheManager()) {
     const auto prewarmVisibleText = [&]() {
       pageRenderScope.emplace(*fcm, FontCacheManager::PreparationPolicy::Normal);
-      page->renderText(renderer, fontId, marginLeft, marginTop);
+      page->renderText(renderer, fonts, marginLeft, marginTop);
       drawChrome();
       if (!pageRenderScope->endScanAndPrewarm()) {
         pageRenderScope.reset();
@@ -185,7 +185,7 @@ void EpubReaderFootnoteSelectActivity::render(RenderLock&&) {
   }
 
   renderer.clearScreen(ReaderUtils::readerBackgroundColor());
-  page->render(renderer, fontId, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
+  page->render(renderer, fonts, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
   drawHighlightWithSnapshot();
   drawChrome();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);

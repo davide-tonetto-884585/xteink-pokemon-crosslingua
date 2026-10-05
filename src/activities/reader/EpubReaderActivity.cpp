@@ -359,6 +359,15 @@ SectionFallbackResult runSectionBuildFallbacks(const EpubRenderMode selectedMode
   return result;
 }
 
+// The section may have been laid out with a fallback body font (safe mode / SD font recovery):
+// re-anchor the role slots that resolved to the settings body font onto the actual one.
+PageFontSet reanchorPageFonts(PageFontSet fonts, const int bodyFontId) {
+  if (fonts.translation == fonts.body) fonts.translation = bodyFontId;
+  if (fonts.annotation == fonts.body) fonts.annotation = bodyFontId;
+  fonts.body = bodyFontId;
+  return fonts;
+}
+
 ReaderRenderSpec readerRenderSpecForProfile(const int fontId, const uint16_t viewportWidth,
                                             const uint16_t viewportHeight, const SectionBuildProfile& profile) {
   ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight, profile.renderMode);
@@ -3765,6 +3774,9 @@ void EpubReaderActivity::openWordSelect(bool framebufferContainsPage, int initia
   std::string bookCachePath;
   std::string nextPageFirstWord;
   bool hasNextPageForLookup = false;
+  // Lingua lays some lines out in other fonts (smaller translations, interlinear annotation rows);
+  // the selector must measure and redraw each line in the font it was laid out with.
+  PageFontSet pageFonts;
 
   {
     RenderLock lock(*this);
@@ -3780,6 +3792,7 @@ void EpubReaderActivity::openWordSelect(bool framebufferContainsPage, int initia
     }
 
     layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
+    pageFonts = linguaPageFonts(activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId());
     bookCachePath = epub->getCachePath();
 
     if (section->currentPage < section->pageCount - 1) {
@@ -3806,7 +3819,8 @@ void EpubReaderActivity::openWordSelect(bool framebufferContainsPage, int initia
   // The activity outlives this call, so it must be heap-owned; make the fixed-size
   // object allocation fallible instead of aborting the firmware when memory is tight.
   auto wordSelect = makeUniqueNoThrow<DictionaryWordSelectActivity>(
-      renderer, mappedInput, std::move(pageForLookup), layout.marginLeft, layout.marginTop, std::move(bookCachePath),
+      renderer, mappedInput, std::move(pageForLookup), layout.marginLeft, layout.marginTop, pageFonts,
+      std::move(bookCachePath),
       std::move(nextPageFirstWord), hasNextPageForLookup, framebufferContainsPage, layout.marginBottom, initialTouchX,
       initialTouchY, autoLookupInitialWord, bookSettings.dictionarySdFontFamilyName,
       bookSettings.dictionaryFontPointSize, this, &EpubReaderActivity::reloadDictionaryLookupPageCallback);
@@ -4868,13 +4882,7 @@ void EpubReaderActivity::handOffToAssistant(BookAssistantActivity::Request reque
 }
 
 PageFontSet EpubReaderActivity::linguaPageFonts(const int bodyFontId) const {
-  // The section may have been laid out with a fallback body font (safe mode / SD font recovery):
-  // re-anchor the role slots that resolved to the settings body font onto the actual one.
-  PageFontSet fonts = lingua.pageFontSet();
-  if (fonts.translation == fonts.body) fonts.translation = bodyFontId;
-  if (fonts.annotation == fonts.body) fonts.annotation = bodyFontId;
-  fonts.body = bodyFontId;
-  return fonts;
+  return reanchorPageFonts(lingua.pageFontSet(), bodyFontId);
 }
 
 std::unique_ptr<Activity> EpubReaderActivity::createFrontlightReadingStatsActivity() {
@@ -5819,7 +5827,8 @@ void EpubReaderActivity::openFootnoteSelect(const bool returnToReaderMenu) {
   std::unique_ptr<Page> page;
   FootnoteLinkTargets targets{};
   ReaderViewportLayout layout{};
-  const int fontId = activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
+  const PageFontSet pageFonts =
+      linguaPageFonts(activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId());
   {
     RenderLock lock(*this);
     if (section) {
@@ -5827,7 +5836,7 @@ void EpubReaderActivity::openFootnoteSelect(const bool returnToReaderMenu) {
       if (page) {
         layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
         targets =
-            buildFootnoteLinkTargets(*page, page->footnotes, renderer, fontId, layout.marginTop, layout.marginLeft);
+            buildFootnoteLinkTargets(*page, page->footnotes, renderer, pageFonts, layout.marginTop, layout.marginLeft);
       }
     }
   }
@@ -5864,7 +5873,7 @@ void EpubReaderActivity::openFootnoteSelect(const bool returnToReaderMenu) {
   }
   if (allTargetsVisible) {
     auto selector = makeUniqueNoThrow<EpubReaderFootnoteSelectActivity>(renderer, mappedInput, std::move(page), targets,
-                                                                        fontId, layout.marginLeft, layout.marginTop);
+                                                                        pageFonts, layout.marginLeft, layout.marginTop);
     if (selector) {
       startActivityForResult(std::move(selector), onResult);
       return;
@@ -7808,7 +7817,7 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   }
 
 #if CROSSINK_APP_CAP_TOUCH
-  buildFootnoteTouchTargets(*page, fontId, orientedMarginTop, orientedMarginLeft);
+  buildFootnoteTouchTargets(*page, fonts, orientedMarginTop, orientedMarginLeft);
 #endif
 
   const bool pageHasImages = page->hasImages();
@@ -8030,12 +8039,12 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
 }
 
 #if CROSSINK_APP_CAP_TOUCH
-void EpubReaderActivity::buildFootnoteTouchTargets(const Page& page, const int fontId, const int orientedMarginTop,
-                                                   const int orientedMarginLeft) {
+void EpubReaderActivity::buildFootnoteTouchTargets(const Page& page, const PageFontSet& fonts,
+                                                   const int orientedMarginTop, const int orientedMarginLeft) {
   currentPageFootnoteTouchTargets.fill({});
   if (activeFootnotePreview || currentPageFootnotes.empty()) return;
   currentPageFootnoteTouchTargets =
-      buildFootnoteLinkTargets(page, currentPageFootnotes, renderer, fontId, orientedMarginTop, orientedMarginLeft);
+      buildFootnoteLinkTargets(page, currentPageFootnotes, renderer, fonts, orientedMarginTop, orientedMarginLeft);
 }
 
 bool EpubReaderActivity::handleTouchFootnoteLink(const int touchX, const int touchY) {
@@ -8782,7 +8791,10 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
     ImageBlock::setExtractor(nullptr, nullptr, nullptr);
   }
   renderer.clearScreen(ReaderUtils::readerBackgroundColor());
-  page->render(renderer, renderFontId, layout.marginLeft, layout.marginTop, ReaderUtils::readerForegroundBlack());
+  // Same per-role fonts as the reader (Lingua: smaller translations, interlinear annotation rows);
+  // the body font alone would draw annotation rows full size over the source lines.
+  const PageFontSet pageFonts = reanchorPageFonts(LinguaReaderIntegration::resolvePageFontSet(), renderFontId);
+  page->render(renderer, pageFonts, layout.marginLeft, layout.marginTop, ReaderUtils::readerForegroundBlack());
   drawPublisherPageMarkers(renderer, *page, layout.marginTop, renderer.getScreenHeight() - layout.marginBottom,
                            ReaderUtils::readerForegroundBlack());
   // No displayBuffer call; caller (SleepActivity) handles that after compositing the overlay.

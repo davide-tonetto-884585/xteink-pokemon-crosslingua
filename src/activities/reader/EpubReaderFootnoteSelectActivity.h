@@ -13,11 +13,12 @@
 class EpubReaderFootnoteSelectActivity final : public Activity {
  public:
   EpubReaderFootnoteSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Page> page,
-                                   FootnoteLinkTargets targets, int fontId, int marginLeft, int marginTop)
+                                   FootnoteLinkTargets targets, const PageFontSet& fonts, int marginLeft, int marginTop)
       : Activity("EpubReaderFootnoteSelect", renderer, mappedInput),
         page(std::move(page)),
         targets(targets),
-        fontId(fontId),
+        fontId(fonts.body),
+        fonts(fonts),
         marginLeft(marginLeft),
         marginTop(marginTop) {}
 
@@ -39,7 +40,9 @@ class EpubReaderFootnoteSelectActivity final : public Activity {
 
   std::unique_ptr<Page> page;
   FootnoteLinkTargets targets;
-  const int fontId;
+  const int fontId;  // body font; fonts.body
+  // The reader's per-role fonts (Lingua): the page is redrawn exactly as the reader drew it.
+  const PageFontSet fonts;
   const int marginLeft;
   const int marginTop;
   std::array<uint8_t, EPUB_MAX_FOOTNOTES_PER_PAGE> selectable{};

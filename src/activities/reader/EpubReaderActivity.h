@@ -457,7 +457,8 @@ class EpubReaderActivity final : public Activity {
 #if CROSSINK_APP_CAP_TOUCH
   bool handlePinchFontResize();
   void resetPinchFontGesture();
-  void buildFootnoteTouchTargets(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft);
+  void buildFootnoteTouchTargets(const Page& page, const PageFontSet& fonts, int orientedMarginTop,
+                                 int orientedMarginLeft);
   bool handleTouchFootnoteLink(int touchX, int touchY);
 #endif
   void suppressPowerShortcutRelease();

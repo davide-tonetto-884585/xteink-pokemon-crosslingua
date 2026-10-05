@@ -21,16 +21,20 @@ class DictionaryWordSelectActivity final : public Activity {
   // height, per the caller's own layout formula. The skip-initial-render fast
   // path clears exactly that strip so the framebuffer matches the menu→lookup
   // path (no status bar, no auto-turn label visible during word-select).
+  // pageFonts is the reader's per-role font set for this section (Lingua lays some lines out in
+  // other fonts); the page is redrawn and its words measured with it.
   explicit DictionaryWordSelectActivity(
       GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Page> page, int marginLeft, int marginTop,
-      std::string cachePath, std::string nextPageFirstWord = "", bool hasNextReaderPage = false,
-      bool framebufferContainsPage = false, int reservedBottomHeight = 0, int initialTouchX = -1,
-      int initialTouchY = -1, bool autoLookupInitialWord = false, const char* dictionaryFontFamilyName = nullptr,
-      uint8_t dictionaryFontPointSize = 0, void* readerContext = nullptr, ReaderPageLoadFn readerPageLoad = nullptr)
+      const PageFontSet& pageFonts, std::string cachePath, std::string nextPageFirstWord = "",
+      bool hasNextReaderPage = false, bool framebufferContainsPage = false, int reservedBottomHeight = 0,
+      int initialTouchX = -1, int initialTouchY = -1, bool autoLookupInitialWord = false,
+      const char* dictionaryFontFamilyName = nullptr, uint8_t dictionaryFontPointSize = 0,
+      void* readerContext = nullptr, ReaderPageLoadFn readerPageLoad = nullptr)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         page(std::move(page)),
         marginLeft(marginLeft),
         marginTop(marginTop),
+        pageFonts_(pageFonts),
         cachePath(std::move(cachePath)),
         nextPageFirstWord(std::move(nextPageFirstWord)),
         hasNextReaderPage_(hasNextReaderPage),
@@ -61,6 +65,7 @@ class DictionaryWordSelectActivity final : public Activity {
   std::unique_ptr<Page> page;
   int marginLeft;
   int marginTop;
+  PageFontSet pageFonts_;
   std::string cachePath;
   std::string nextPageFirstWord;
   bool hasNextReaderPage_ = false;
