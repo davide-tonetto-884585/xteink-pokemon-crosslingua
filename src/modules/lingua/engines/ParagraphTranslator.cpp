@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "CrossPointSettings.h"
+#include "modules/lingua/utils/HtmlEntityDecode.h"
 #include "network/HttpDownloader.h"
 
 namespace {
@@ -460,8 +461,24 @@ bool ParagraphTranslator::translateGoogleHtml(const std::string& text, const cha
     return out;
   };
 
+  // translateHtml reads its input as HTML: escape the book's plain text so a literal '&', '<' or '>'
+  // survives instead of being taken for markup (an unescaped "<early>" is dropped as a tag). The reply
+  // is HTML-escaped in turn and decoded centrally in translate().
+  std::string htmlText;
+  htmlText.reserve(text.size() + 16);
+  for (char c : text) {
+    if (c == '&')
+      htmlText += "&amp;";
+    else if (c == '<')
+      htmlText += "&lt;";
+    else if (c == '>')
+      htmlText += "&gt;";
+    else
+      htmlText += c;
+  }
+
   std::string body = "[[[\"";
-  body += jsonEscape(text);
+  body += jsonEscape(htmlText);
   body += "\"],\"";
   body += src;
   body += "\",\"";
@@ -844,6 +861,10 @@ bool ParagraphTranslator::translate(const std::string& text, const char* sourceL
   }
 
   if (ok) {
+    // Every consumer treats the result as plain text, but some engines answer with HTML entities
+    // (Google translateHtml: "dell&#39;alba", "&quot;ciao&quot;"); the book rewriter would escape the
+    // '&' again and the reader would show "&#39;" literally.
+    lingua::decodeHtmlEntitiesInPlace(result);
     LOG_DBG("Translator", "Translation OK, result=%u bytes", (unsigned)result.size());
   } else if (errorOut) {
     // Format error from HTTP code
