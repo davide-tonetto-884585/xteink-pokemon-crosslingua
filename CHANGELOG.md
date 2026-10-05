@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Added
+
+- **Book assistant** (reader menu, More tab; it replaces the Recap entry and keeps the recap): besides recapping the last pages, Google Gemini can now list the **main characters** you have met so far, answer a **question** you type, and explain **who is...?** a name or term you select on the page. These answers use the whole book up to your page: the full text of the current chapter plus a short summary of every earlier chapter. The summaries are made once per chapter the first time you use the assistant on a book (a progress screen shows them; Back cancels and keeps the ones already done) and are saved on the SD card, so later questions are quick. Answers never use anything after your page. After an answer, press Confirm on the last page to ask another question. See [docs/book-assistant.md](docs/book-assistant.md). English and Italian only for now.
+
 ## [1.11.0] - 2026-10-05
 
 ### Changed
@@ -27,7 +33,7 @@
 
 ### Added
 
-- **Recap** (reader menu; on touch devices, the More tab of the reader drawer): Google Gemini summarizes the last 3, 5, 10 or 20 pages you read in the current chapter, or the whole chapter up to your page, so you can catch up after a break. The recap is written in your interface language and covers only what you have read: it never reveals later events. You need a free Gemini API key from Google AI Studio, entered once in Recap → Gemini API key; no credit card is required. If Gemini 3 Flash is rate-limited, the reader falls back to Gemini 3.1 Flash-Lite. On the free tier, Google may use the text you send to improve its models. See [docs/chapter-recap.md](docs/chapter-recap.md). English and Italian only for now.
+- **Recap** (reader menu; on touch devices, the More tab of the reader drawer): Google Gemini summarizes the last 3, 5, 10 or 20 pages you read in the current chapter, or the whole chapter up to your page, so you can catch up after a break. The recap is written in your interface language and covers only what you have read: it never reveals later events. You need a free Gemini API key from Google AI Studio, entered once in Recap → Gemini API key; no credit card is required. If Gemini 3 Flash is rate-limited, the reader falls back to Gemini 3.1 Flash-Lite. On the free tier, Google may use the text you send to improve its models. See [docs/book-assistant.md](docs/book-assistant.md). English and Italian only for now.
 
 ### Changed
 

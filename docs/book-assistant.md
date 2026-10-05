@@ -1,26 +1,53 @@
-# Chapter Recap
+# Book Assistant
 
-**Recap** (reader menu) asks Google Gemini to summarize the pages you read most recently in the
-current chapter. Use it to pick a book back up after a break.
+**Book assistant** (reader menu) asks Google Gemini about the book you are reading. It can recap
+the pages you just read, list the main characters so far, answer a question you type, or tell you
+who a name on the page is. Answers are written in the reader's interface language (Settings →
+Language), whatever language the book is in. They use only the book up to your page, so they don't
+spoil what comes next.
 
 ## Using it
 
-1. Open the reader menu and choose **Recap**. On touch devices it is in the **More** tab of the
-   reader drawer.
-2. Choose how much to summarize: the last 3, 5, 10 or 20 pages, or **Chapter so far**. The excerpt
-   always ends at the page you are on, and it never goes back past the start of the current chapter.
-   The reader remembers your choice.
-3. The first time, enter your Gemini API key (see below).
-4. The reader connects to Wi-Fi, sends the excerpt and shows the recap. Page through it with the
-   page/arrow buttons (or swipe/tap on touch devices). **Back** returns to the book on the same page.
+Open the reader menu and choose **Book assistant**. On touch devices it is in the **More** tab of
+the reader drawer. Then pick one of these:
 
-The recap is written in the reader's interface language (Settings → Language), whatever language
-the book is in. The model is told to use only the excerpt and not to reveal anything that happens
-later in the book.
+- **Ask a question**: type a question with the on-screen keyboard, for example "Why did Anna leave
+  the village?".
+- **Who is...? (select in text)**: select a name or a term on the page, the same way you select
+  text for a clipping. Press Confirm on the first word, move to the last word and press Confirm
+  again; on touch devices, drag over it. The assistant explains who or what it is and its role so
+  far.
+- **Main characters**: the main characters you have met so far, who they are and where they stand.
+- **Recap: last 3, 5, 10 or 20 pages** or **Recap: chapter so far**: a short summary of what you
+  just read in the current chapter.
+- **Gemini API key**: set or change the key (see below).
 
-If you are on a page near the start of a chapter, the recap covers fewer pages than you chose,
-because it stops at the chapter's first page. At most about 20 KB of text is sent (roughly 10-15
-pages). Longer excerpts are cut from the front, so the most recent pages are always included.
+The first time, enter your Gemini API key. The reader then connects to Wi-Fi, asks Gemini and shows
+the answer. Page through it with the page/arrow buttons (or swipe/tap on touch devices). After a
+question, a "who is" answer or the character list, pressing **Confirm** on the last page lets you
+ask another question. **Back** returns to the book on the same page. The reader remembers your last
+choice.
+
+## How the assistant knows the book
+
+Gemini can read a whole book, but the reader cannot hold one in memory. So the assistant sends:
+
+- the full text of the current chapter, from its start up to your page (the last 120 KB if the
+  chapter is very long), and
+- a summary of every earlier chapter.
+
+The chapter summaries are made with Gemini the first time you use the assistant on a book, one
+request per chapter, and saved on the SD card in the book's cache folder. A progress screen shows
+"Summarizing chapter N of M". It takes a few seconds per chapter, so a book you are halfway through
+can take a few minutes the first time. Later questions only summarize the chapters you have
+finished since, so they are quick. **Back** cancels the preparation; the summaries already made
+are kept for next time. Deleting the book's cache (reader menu → Settings) deletes them too.
+
+Details from early chapters are known only through their summaries, so a very specific question
+about something far back can get a vaguer answer than one about the current chapter.
+
+**Recap** works differently: it sends only the pages you chose from the current chapter (at most
+about 20 KB, roughly 10-15 pages, cutting the oldest first) and needs no chapter summaries.
 
 ## Getting a Gemini API key
 
@@ -29,42 +56,69 @@ pages). Longer excerpts are cut from the front, so the most recent pages are alw
 3. Put the key on the reader, in one of two ways:
    - **From a computer (easier):** save the key alone in a text file named `gemini-api-key.txt` at
      the root of the SD card (over USB, or with the Wi-Fi file transfer). The next time you open
-     **Recap**, the reader imports the key and deletes the file.
-   - **On the device:** choose **Recap → Gemini API key** and type it. The key is shown while you
-     type, so you can check it: a single wrong character makes Google reject it.
+     **Book assistant**, the reader imports the key and deletes the file.
+   - **On the device:** choose **Book assistant → Gemini API key** and type it. The key is shown
+     while you type, so you can check it: a single wrong character makes Google reject it.
 
    You can change the key at any time the same ways.
 
-If you already use **Gemini** as the Lingua translation engine, Recap uses that key until you set a
-separate one.
+If you already use **Gemini** as the Lingua translation engine, the assistant uses that key until
+you set a separate one.
 
 ## Models and limits
 
-The reader tries `gemini-3-flash-preview` first. If that model is not available for your key, is
-rate-limited or is overloaded, it falls back to `gemini-3.1-flash-lite`, then `gemini-flash-latest`.
-Each model has its own free-tier quota, so the fallback keeps Recap working after you hit Flash's
-per-minute limit.
+Answers use `gemini-3-flash-preview` first. If that model is not available for your key, is
+rate-limited or is overloaded, the reader falls back to `gemini-3.1-flash-lite`, then
+`gemini-flash-latest`. Chapter summaries go the other way: Flash-Lite first, keeping Flash's quota
+for your answers. Each model has its own free-tier quota.
 
-Google does not publish fixed free-tier limits. AI Studio shows the current limits for your project,
-and they can change at any time. If every model is over its limit, the reader shows "Gemini
-free-tier limit reached": wait a minute, then press **Retry**.
+The reader waits at least 4 seconds between chapter summaries. If every model is over its
+per-minute limit, it waits 30 seconds and tries again, a few times. Google does not publish fixed
+free-tier limits: AI Studio shows the current limits for your project, and they can change at any
+time. There is also a daily limit, so preparing a long book can use a good part of it the first
+time. If the limit is reached, the reader shows "Gemini free-tier limit reached". Press **Retry**
+later: the chapters already summarized are not done again.
 
 ## Privacy
 
-The excerpt (the text of the pages you chose), plus the book and chapter titles, is sent to Google.
-**On the free tier, Google may use the text you send to improve its models.** Don't use Recap on
-documents you don't want to share. The API key is stored in the reader's settings file on the SD
-card and is sent in a request header, never in the URL.
+What is sent to Google: the text of the current chapter up to your page, your question or the term
+you selected, and the book and chapter titles. When chapters are summarized, the text of each
+earlier chapter is sent too, once. In practice, **the book up to your page is sent to Google.** On
+the free tier, Google may use the text you send to improve its models. Don't use the assistant on
+books or documents you don't want to share.
+
+The API key is stored in the reader's settings file on the SD card and is sent in a request header,
+never in the URL.
+
+## Limitations
+
+- If you know a famous book, so does Gemini. It is told not to reveal anything after your page and
+  to answer only from the text it receives, but that is not a guarantee.
+- A book stored as one huge chapter (one file for the whole text) gets no earlier-chapter
+  summaries: the assistant sees only the last 120 KB of text (150 pages at most) before your page.
+- Pages before the current chapter are read from the original EPUB, so a Lingua translation does
+  not change what is summarized.
 
 ## For developers
 
 - `src/modules/recap/RecapText.*`: rebuilds plain text from laid-out pages. It rejoins words split
-  by inserted hyphens and turns the layout's em-space paragraph indent into a line break.
-- `src/modules/recap/GeminiRecap.*`: builds the `generateContent` request body (system instruction
-  plus excerpt, `thinkingLevel: low`) and parses the response. It also holds the model fallback list
-  and the Markdown stripping. Covered by `test/chapter_recap`.
-- `src/modules/recap/ChapterRecapActivity.*`: Wi-Fi, the request on a worker task (with the
-  framebuffer released, like the Lingua translation activities) and the paged result screen.
-- `EpubReaderActivity::launchRecap()` extracts the excerpt while the section is loaded. Then it
-  tears down the reader and replaces it with the recap activity, the same hand-off Lingua
-  translation uses. Back relaunches the reader from disk.
+  by inserted hyphens and turns the em-space paragraph indent into a line break. `drain()` lets the
+  reader write the current chapter to the SD card page by page.
+- `src/modules/recap/HtmlTextExtractor.*`: streaming, chunk-safe XHTML → plain text for chapters
+  that are not laid out (skips `<head>`, `<script>`, `<style>` and ruby annotations, turns block
+  tags into line breaks, decodes entities, collapses whitespace).
+- `src/modules/recap/GeminiRecap.*`: prompts (recap, characters, question, who-is, chapter summary),
+  the in-memory recap body and the pieces of a streamed body (`streamingBodyPrefix()`,
+  `appendJsonEscaped()`, `streamingBodySuffix()`), response/error parsing, the model lists and the
+  Markdown stripping. Covered by `test/chapter_recap`.
+- `src/modules/recap/BookAssistantActivity.*`: Wi-Fi, one worker task per request (framebuffer
+  released, like the Lingua translation activities) and the paged answer. For the context modes,
+  the worker loads the EPUB metadata-only and fills in missing `<book cache>/assistant/ch<N>.sum`
+  files: an empty file marks a chapter with no story text. It then assembles
+  `<book cache>/assistant/body.json` (summaries plus `current.txt`) on the SD card and sends it with
+  `HttpDownloader::postFile()`, which streams it with `esp_http_client_write()` (the simulator
+  sends it buffered). Between chapters the worker asks the main task to repaint the progress
+  screen, which restores the framebuffer, draws and releases it again.
+- `EpubReaderActivity::openBookAssistant()` and the functions after it: the picker, the key
+  prompt, the question keyboard, writing `current.txt`, and the hand-off. "Who is" reuses
+  `startClipSelection()` with `forAssistantWhoIs`: the selection is not saved as a clipping.
