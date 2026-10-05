@@ -1,5 +1,6 @@
 #include "modules/lingua/activities/ChapterTranslationActivity.h"
 
+#include <Epub/Section.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -519,6 +520,8 @@ void ChapterTranslationActivity::runTranslation() {
     taskFailed = true;
     return;
   }
+  // The pages laid out from the previous translation are stale (e.g. after "missing only").
+  Section::invalidatePageCaches(translatedHtmlPath);
 
   LOG_DBG("CHT", "Translation done: %d translated, %d skipped, %d failed, %d already translated%s",
           lastResult.paragraphsTranslated, lastResult.paragraphsSkipped, lastResult.translateFailures,

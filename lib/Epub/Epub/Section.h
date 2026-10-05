@@ -140,6 +140,11 @@ class Section {
   // (`<cache>/sections/<spineIndex>.translated.html`). The translator subsystem writes it; builds
   // prefer it over the unzipped chapter HTML when present, and it survives layout-cache invalidation.
   std::string getTranslatedHtmlPath() const;
+  // Lingua: drops every laid-out page cache (.bin, any render-mode suffix, backups) of the chapter
+  // whose translated HTML is `translatedHtmlPath`, so the reader rebuilds it from the new
+  // translation. Needed after a re-translation that keeps the translated file in place (missing
+  // only / retry): the cache key only records *whether* a translation exists, not its content.
+  static void invalidatePageCaches(const std::string& translatedHtmlPath);
   // Lingua: does this chapter have a translation to display (reader-produced sidecar, or translations
   // embedded in the chapter's own XHTML)? Memoized; answers TRUE while not yet knowable for free.
   bool hasTranslation() const;

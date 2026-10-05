@@ -4,7 +4,46 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include <string>
+#include <vector>
+
 #include "modules/lingua/services/TranslatedContentDetector.h"
+void Section::invalidatePageCaches(const std::string& translatedHtmlPath) {
+  const size_t slash = translatedHtmlPath.rfind('/');
+  if (slash == std::string::npos) return;
+  const std::string dirPath = translatedHtmlPath.substr(0, slash);
+  std::string stem = translatedHtmlPath.substr(slash + 1);  // "<spine>.translated.html"
+  stem = stem.substr(0, stem.find('.'));                    // "<spine>"
+  if (stem.empty()) return;
+
+  // Collect first, delete after the directory handle is closed.
+  std::vector<std::string> stale;
+  HalFile dir = Storage.open(dirPath.c_str());
+  if (!dir || !dir.isDirectory()) return;
+  char name[96] = {};
+  while (true) {
+    HalFile entry = dir.openNextFile();
+    if (!entry) break;
+    const bool isDirectory = entry.isDirectory();
+    if (!isDirectory) entry.getName(name, sizeof(name));
+    entry.close();
+    if (isDirectory) continue;
+    const std::string file(name);
+    // "<spine>.bin", "<spine><suffix>.bin(.bak)": the char after the index must not be a digit, so
+    // chapter 1 never matches chapter 12.
+    if (file.size() <= stem.size() || file.compare(0, stem.size(), stem) != 0) continue;
+    const char next = file[stem.size()];
+    if (next >= '0' && next <= '9') continue;
+    if (file.find(".bin") == std::string::npos) continue;
+    stale.push_back(dirPath + "/" + file);
+  }
+  dir.close();
+  for (const auto& path : stale) {
+    Storage.remove(path.c_str());
+    LOG_DBG("SCT", "Invalidated page cache %s", path.c_str());
+  }
+}
+
 std::string Section::getTranslatedHtmlPath() const {
   return epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + ".translated.html";
 }

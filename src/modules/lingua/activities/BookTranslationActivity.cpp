@@ -1,5 +1,6 @@
 #include "modules/lingua/activities/BookTranslationActivity.h"
 
+#include <Epub/Section.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -552,6 +553,7 @@ void BookTranslationActivity::runTranslation() {
       taskFailed = true;
       return;
     }
+    Section::invalidatePageCaches(translatedPath);
 
     chaptersCompleted = chaptersCompleted + 1;  // ++ on volatile is deprecated in C++20
     LOG_DBG("BKT", "Ch %d/%d: done (%d translated, %d skipped), free=%d", si + 1, totalChapters,
