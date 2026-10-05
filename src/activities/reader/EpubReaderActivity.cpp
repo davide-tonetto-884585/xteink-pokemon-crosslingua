@@ -4600,6 +4600,43 @@ void importRecapApiKeyFromSd() {
   Storage.remove(RECAP_KEY_IMPORT_PATH);
 }
 
+// A selection takes the punctuation and quotes glued to its first/last word ("Rossi." or
+// "«Elena"); drop them so the assistant (and its title) gets just the name.
+std::string trimSelectionPunctuation(std::string text) {
+  static constexpr const char* EDGE_MARKS[] = {"\xe2\x80\x9c", "\xe2\x80\x9d", "\xe2\x80\x98", "\xe2\x80\x99",
+                                               "\xc2\xab",     "\xc2\xbb",     "\xe2\x80\x94", "\xe2\x80\xa6"};
+  const auto stripOne = [&text](const bool front) {
+    if (text.empty()) return false;
+    const char c = front ? text.front() : text.back();
+    if (std::strchr(".,;:!?\"'()[]-_*", c) != nullptr) {
+      if (front) {
+        text.erase(0, 1);
+      } else {
+        text.pop_back();
+      }
+      return true;
+    }
+    for (const char* mark : EDGE_MARKS) {
+      const size_t len = std::strlen(mark);
+      if (text.size() < len) continue;
+      if (front && text.compare(0, len, mark) == 0) {
+        text.erase(0, len);
+        return true;
+      }
+      if (!front && text.compare(text.size() - len, len, mark) == 0) {
+        text.erase(text.size() - len);
+        return true;
+      }
+    }
+    return false;
+  };
+  while (stripOne(true)) {
+  }
+  while (stripOne(false)) {
+  }
+  return trimmedKey(text);
+}
+
 bool hasRecapApiKey() {
   return SETTINGS.recapApiKey[0] != '\0' ||
          (SETTINGS.translationEngine == CrossPointSettings::ENGINE_GEMINI && SETTINGS.translateApiKey[0] != '\0');
@@ -4794,6 +4831,9 @@ void EpubReaderActivity::launchBookAssistant(const BookAssistantActivity::Mode m
 
 void EpubReaderActivity::appendPageToRecapText(const Page& page, recap::RecapTextBuilder& builder) {
   forEachPageTextLine(page, [&builder](const PageTextLine& line) {
+    // Interlinear annotation rows are reader-inserted glosses of the line below: sending them would
+    // interleave two languages line by line. The book's own text is enough context.
+    if (line.fontRole == LineFontRole::Annotation) return true;
     const TextBlock& block = *line.block;
     for (uint16_t i = 0; i < block.wordCount(); i++) {
       builder.addWord(block.wordText(i), block.wordTextLen(i), block.wordHasSpaceBefore(i),
@@ -5048,6 +5088,9 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
   ReaderViewportLayout layout{};
   ClipWordStore wordStore;
   int readerFontId = 0;
+  // Lingua lays some lines out in other fonts (smaller translations, interlinear annotation rows);
+  // selection must measure and redraw each line in the font it was laid out with.
+  PageFontSet pageFonts;
   int startPage = 0;
   std::string bookTitle;
   std::string author;
@@ -5067,6 +5110,7 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
 
     layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
     readerFontId = activeSectionFontId > 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
+    pageFonts = linguaPageFonts(readerFontId);
     startPage = section->currentPage;
     if (renderer.isSdCardFont(readerFontId)) {
       // Four 256-entry buckets (~4.2 KB plus reusable RTL strings) cannot fit
@@ -5158,7 +5202,9 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
         for (uint16_t i = 0; i < block.wordCount(); ++i) {
           const char* wordText = block.wordText(i);
           if (!hasVisibleWordText(wordText)) continue;
-          if (pageWordGeometry(renderer, readerFontId, line, block, i).width > 0) ++pageSelectableWords;
+          if (pageWordGeometry(renderer, pageFonts.forRole(line.fontRole), line, block, i).width > 0) {
+            ++pageSelectableWords;
+          }
         }
         return true;
       });
@@ -5219,11 +5265,16 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
           if (!hasVisibleWordText(wordText)) continue;
 
           const auto textStyle = static_cast<EpdFontFamily::Style>(block.wordStyle(i) & ~EpdFontFamily::UNDERLINE);
-          const PageWordGeometry geometry = pageWordGeometry(renderer, readerFontId, line, block, i);
+          const int lineFontId = pageFonts.forRole(line.fontRole);
+          const PageWordGeometry geometry = pageWordGeometry(renderer, lineFontId, line, block, i);
           if (geometry.width <= 0) continue;
           const size_t wordIndexOnPage = pageWordIndex++;
           if (wordIndexOnPage < firstWordToKeep) continue;
           if (wordIndexOnPage >= firstWordToKeep + wordsToKeep) break;
+          // Interlinear annotation rows are reader-inserted glosses, not book text: they stay on
+          // screen but are not selectable. They still take their ordinal above, so page-word
+          // indices match the reader's other per-page word walks.
+          if (line.fontRole == LineFontRole::Annotation) continue;
           if (wordStore.words.size() >= maxSelectableWords) {
             if (!wordLimitLogged) {
               LOG_ERR("CLIP", "Selectable word cap hit (%u words); clipping range truncated",
@@ -5237,7 +5288,9 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
           word.x = layout.marginLeft + line.xPos + geometry.xOffset;
           word.y = layout.marginTop + line.yPos;
           word.w = geometry.width;
-          word.h = line.lineHeight > 0 ? line.lineHeight : lineHeight;
+          word.h = line.lineHeight > 0 ? line.lineHeight
+                   : line.fontRole == LineFontRole::Body ? lineHeight
+                                                         : renderer.getLineHeight(lineFontId);
           word.pageIdx = pageIdx;
           word.pageWordIndex = static_cast<uint16_t>(wordIndexOnPage);
           word.tableSelection = line.tableSelection;
@@ -5318,7 +5371,7 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
   advanceCollector.reset();
   pauseReadingPaceTimer("clip_selection");
   auto clipSelection = makeUniqueNoThrow<ClipSelectionActivity>(
-      renderer, mappedInput, std::move(wordStore), readerFontId, *section, startPage, layout.marginTop,
+      renderer, mappedInput, std::move(wordStore), pageFonts, *section, startPage, layout.marginTop,
       layout.marginLeft, dictionaryRequest, ignoreInitialBackRelease);
   if (!clipSelection) {
     LOG_ERR("CLIP", "OOM: failed to allocate clip selection activity");
@@ -5337,7 +5390,7 @@ void EpubReaderActivity::startClipSelection(const DictionaryClippingRequest* dic
       }
       // A name or short term: one line, trimmed, capped without splitting a UTF-8 sequence.
       std::replace(subject.begin(), subject.end(), '\n', ' ');
-      subject = trimmedKey(subject);
+      subject = trimSelectionPunctuation(trimmedKey(subject));
       if (subject.size() > ASSISTANT_MAX_SUBJECT_CHARS) {
         size_t cut = ASSISTANT_MAX_SUBJECT_CHARS;
         while (cut > 0 && (static_cast<unsigned char>(subject[cut]) & 0xC0) == 0x80) cut--;

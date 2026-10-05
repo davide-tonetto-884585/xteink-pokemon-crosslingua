@@ -385,11 +385,11 @@ bool Page::forEachTextLine(const PageTextLineVisitor visitor, void* context) con
 
     if (element->getTag() == TAG_PageLine) {
       const auto& line = static_cast<const PageLine&>(*element);
-      if (line.getBlock() && !visitor({line.getBlock().get(), line.xPos, line.yPos, 0, 0, 0, 0,
-                                       line.getBlock()->getBlockStyle().lineHeight},
-                                      context)) {
-        return false;
-      }
+      if (!line.getBlock()) continue;
+      PageTextLine textLine{line.getBlock().get(), line.xPos, line.yPos, 0, 0, 0, 0,
+                            line.getBlock()->getBlockStyle().lineHeight};
+      textLine.fontRole = line.fontRole;
+      if (!visitor(textLine, context)) return false;
       continue;
     }
 

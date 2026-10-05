@@ -123,6 +123,9 @@ struct PageTextLine {
   // unsupported table shapes use the sentinel, so their selection behavior is
   // unchanged.
   uint16_t tableSelection = UINT16_MAX;
+  // Which PageFontSet role the line draws in (Lingua: translated text, interlinear annotation
+  // rows). Consumers that measure or redraw words must resolve their font through it.
+  LineFontRole fontRole = LineFontRole::Body;
 };
 
 using PageTextLineVisitor = bool (*)(const PageTextLine& line, void* context);

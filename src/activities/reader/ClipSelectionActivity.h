@@ -26,7 +26,10 @@ struct ClipWordStyle {
 
 class ClipSelectionActivity final : public Activity {
  public:
-  ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, ClipWordStore wordStore, int fontId,
+  // `fonts`: the reader's per-role font set for this section (Lingua lays some lines out in other
+  // fonts); the page is redrawn with it so it looks exactly like the reader page.
+  ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, ClipWordStore wordStore,
+                        const PageFontSet& fonts,
                         Section& section, int startPageInSection, int marginTop, int marginLeft,
                         const DictionaryClippingRequest* dictionaryRequest = nullptr,
                         bool ignoreInitialBackRelease = false);
@@ -45,7 +48,8 @@ class ClipSelectionActivity final : public Activity {
   static constexpr size_t MAX_READING_ORDER_WORDS = 240;
 
   ClipWordStore wordStore;
-  int renderFontId = 0;
+  int renderFontId = 0;  // body font; pageFonts.body
+  PageFontSet pageFonts;
   Section& section;
   int startPageInSection = 0;
   int marginTop = 0;

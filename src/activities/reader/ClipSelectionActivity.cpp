@@ -49,13 +49,14 @@ bool pageUsesButtonHintBand(GfxRenderer& renderer) {
 }  // namespace
 
 ClipSelectionActivity::ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                             ClipWordStore wordStore, const int fontId, Section& section,
+                                             ClipWordStore wordStore, const PageFontSet& fonts, Section& section,
                                              const int startPageInSection, const int marginTop, const int marginLeft,
                                              const DictionaryClippingRequest* dictionaryRequest,
                                              const bool ignoreInitialBackRelease)
     : Activity("ClipSelection", renderer, mappedInput),
       wordStore(std::move(wordStore)),
-      renderFontId(fontId),
+      renderFontId(fonts.body),
+      pageFonts(fonts),
       section(section),
       startPageInSection(startPageInSection),
       marginTop(marginTop),
@@ -551,25 +552,25 @@ bool ClipSelectionActivity::switchToPage(const int pageIdx) {
     bool renderWithFallback = false;
     {
       auto scope = fcm->createPrewarmScope();
-      page->renderText(renderer, renderFontId, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
+      page->renderText(renderer, pageFonts, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
       if (!scope.endScanAndPrewarm() && renderer.isSdCardFont(renderFontId)) {
         useFallbackFont("page prewarm");
         renderWithFallback = true;
       } else {
         renderer.clearScreen(ReaderUtils::readerBackgroundColor());
-        page->render(renderer, renderFontId, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
+        page->render(renderer, pageFonts, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
       }
     }
     if (renderWithFallback) {
       auto fallbackScope = fcm->createPrewarmScope();
-      page->renderText(renderer, renderFontId, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
+      page->renderText(renderer, pageFonts, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
       fallbackScope.endScanAndPrewarm();
       renderer.clearScreen(ReaderUtils::readerBackgroundColor());
-      page->render(renderer, renderFontId, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
+      page->render(renderer, pageFonts, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
     }
   } else {
     renderer.clearScreen(ReaderUtils::readerBackgroundColor());
-    page->render(renderer, renderFontId, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
+    page->render(renderer, pageFonts, marginLeft, marginTop, ReaderUtils::readerForegroundBlack());
   }
 
   // The rendered page is now in the framebuffer, so its deserialized objects
@@ -608,6 +609,10 @@ void ClipSelectionActivity::useFallbackFont(const char* reason) {
   if (usingFallbackFont) return;
   LOG_ERR("CLIP", "SD font %d failed during %s; using fallback font %d for clipping selection", renderFontId, reason,
           CLIP_SELECTION_FALLBACK_FONT_ID);
+  // Roles that resolved to the failed body font follow it to the fallback.
+  if (pageFonts.translation == renderFontId) pageFonts.translation = CLIP_SELECTION_FALLBACK_FONT_ID;
+  if (pageFonts.annotation == renderFontId) pageFonts.annotation = CLIP_SELECTION_FALLBACK_FONT_ID;
+  pageFonts.body = CLIP_SELECTION_FALLBACK_FONT_ID;
   renderFontId = CLIP_SELECTION_FALLBACK_FONT_ID;
   usingFallbackFont = true;
 }
