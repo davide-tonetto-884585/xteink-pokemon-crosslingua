@@ -1,3 +1,16 @@
+## [1.11.4] - 2026-10-07
+
+### Fixed
+
+- Lingua on the **X3 and X4**: translating stayed at 0% and never translated anything. Every request to the translation engine was rejected on the device itself while checking the server's security certificate, so no paragraph was ever sent. Chapters now translate normally.
+- Book assistant on the **X3 and X4**: after asking a question the reader went back to Home without showing the answer. The answer is now shown.
+- Lingua on the **X3**: cancelling a translation restarted the whole reader, and the summary at the end of a translation never appeared (the reader restarted into the book instead). Cancelling now goes straight back to the book, and the summary is shown.
+
+### Changed
+
+- Lingua translates faster on every device: a chapter now keeps one connection to the translation engine instead of opening a new one for each paragraph.
+- Lingua on the **X3 and X4**: while a whole chapter is being translated, the screen now says that the translation is in progress and how long it should take, instead of showing a progress bar stuck at 0%. These readers cannot redraw the screen while translating; the summary appears when it is done. **Translate missing only** and the X4 Pro still show the live progress bar.
+
 ## [1.11.3] - 2026-10-05
 
 ### Fixed
