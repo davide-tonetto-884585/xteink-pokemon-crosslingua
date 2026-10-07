@@ -1,5 +1,6 @@
 #include "modules/lingua/activities/ChapterTranslationActivity.h"
 
+#include <BoardConfig.h>
 #include <Epub/Section.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
@@ -29,6 +30,19 @@
 static constexpr uint8_t AUTO_DETECT_SENTINEL = 0xFF;
 // Framebuffer realloc attempts (100 ms apart) before the silent-restart fallback.
 static constexpr int RESTORE_ATTEMPTS = 20;
+
+// On X3/X4 (ESP32-C3) the 48 KB framebuffer cannot come back mid-chapter: the TLS session and the
+// rewriter's working strings fill the hole it leaves. The progress screen therefore says the run is
+// in progress and how long it should take instead of showing a bar stuck at 0%. "Missing only"
+// runs make few requests, so their bar does update and they keep it.
+#if FREEINK_MCU_C3
+static constexpr bool STATIC_PROGRESS_SCREEN = true;
+#else
+static constexpr bool STATIC_PROGRESS_SCREEN = false;
+#endif
+// Measured on X3 with Google: a 208 KB chapter (1255 paragraphs) took ~330 s.
+static constexpr unsigned long CHAPTER_BYTES_PER_SECOND = 630;
+static constexpr unsigned long CHAPTER_FIXED_SECONDS = 15;
 
 // ─── epub (re)loading ───────────────────────────────────────────────────────
 
@@ -299,6 +313,14 @@ void ChapterTranslationActivity::startTranslation() {
   // in, not immediately at the first boundary.
   lastRepaintMillis = millis();
 
+  estimatedSeconds = 0;
+  if (STATIC_PROGRESS_SCREEN && !fillMissingMode && ensureEpubLoaded()) {
+    size_t chapterBytes = 0;
+    if (epub->getItemSize(epub->getSpineItem(spineIndex).href, &chapterBytes) && chapterBytes > 0) {
+      estimatedSeconds = CHAPTER_FIXED_SECONDS + chapterBytes / CHAPTER_BYTES_PER_SECOND;
+    }
+  }
+
   // Flush the "Translating..." status screen to the panel BEFORE freeing the
   // framebuffer. requestUpdateAndWait() blocks until the render task has drawn and
   // displayed it; E-ink then retains that image with no buffer for the whole run.
@@ -563,6 +585,8 @@ void ChapterTranslationActivity::serviceBatchBoundary() {
   // progressCurrent is up to date. Bail immediately if we're cancelling so onExit()
   // (which sets cancelFlag then waits for the task to finish) never blocks on a spin.
   if (cancelFlag) return;
+  // The static progress screen has nothing to update, and the repaint could not happen anyway.
+  if (STATIC_PROGRESS_SCREEN && !fillMissingMode) return;
 
   const int current = progressCurrent;
   const int total = progressTotal;
@@ -805,23 +829,33 @@ void ChapterTranslationActivity::render(RenderLock&&) {
     const int translated = liveTranslated;
     const int failed = liveFailed;
     y = ui::drawLine(renderer, y, tr(STR_TRANSLATING_CHAPTER), UI_10_FONT_ID);
-    y = ui::drawProgress(renderer, y + 6, current, total);
-    if (total > 0) {
-      snprintf(line, sizeof(line), tr(STR_TRANSLATION_PARAGRAPHS_FORMAT), current, total);
-      y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
-    }
-    snprintf(line, sizeof(line), tr(STR_TRANSLATION_COUNTS_FORMAT), translated, failed);
-    y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
-    const unsigned long elapsed = millis() - runStartMillis;
-    if (current > 0 && total > current) {
-      const unsigned long remaining =
-          static_cast<unsigned long>((static_cast<uint64_t>(elapsed) * (total - current)) / current);
-      snprintf(line, sizeof(line), tr(STR_TRANSLATION_TIME_FORMAT), ui::formatDuration(elapsed).c_str(),
-               ui::formatDuration(remaining).c_str());
+    if (STATIC_PROGRESS_SCREEN && !fillMissingMode) {
+      y = ui::drawLine(renderer, y + 10, tr(STR_TRANSLATION_IN_PROGRESS), UI_12_FONT_ID, /*bold=*/true);
+      if (estimatedSeconds > 0) {
+        snprintf(line, sizeof(line), tr(STR_TRANSLATION_ESTIMATE_FORMAT),
+                 static_cast<int>((estimatedSeconds + 59) / 60));
+        y = ui::drawLine(renderer, y + 4, line, UI_10_FONT_ID);
+      }
+      ui::drawWrapped(renderer, y + 10, tr(STR_TRANSLATION_SCREEN_AT_END), UI_10_FONT_ID, 3);
     } else {
-      snprintf(line, sizeof(line), tr(STR_TRANSLATION_ELAPSED_FORMAT), ui::formatDuration(elapsed).c_str());
+      y = ui::drawProgress(renderer, y + 6, current, total);
+      if (total > 0) {
+        snprintf(line, sizeof(line), tr(STR_TRANSLATION_PARAGRAPHS_FORMAT), current, total);
+        y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
+      }
+      snprintf(line, sizeof(line), tr(STR_TRANSLATION_COUNTS_FORMAT), translated, failed);
+      y = ui::drawLine(renderer, y, line, UI_10_FONT_ID);
+      const unsigned long elapsed = millis() - runStartMillis;
+      if (current > 0 && total > current) {
+        const unsigned long remaining =
+            static_cast<unsigned long>((static_cast<uint64_t>(elapsed) * (total - current)) / current);
+        snprintf(line, sizeof(line), tr(STR_TRANSLATION_TIME_FORMAT), ui::formatDuration(elapsed).c_str(),
+                 ui::formatDuration(remaining).c_str());
+      } else {
+        snprintf(line, sizeof(line), tr(STR_TRANSLATION_ELAPSED_FORMAT), ui::formatDuration(elapsed).c_str());
+      }
+      ui::drawLine(renderer, y, line, UI_10_FONT_ID);
     }
-    ui::drawLine(renderer, y, line, UI_10_FONT_ID);
 
     const char* cancelHint = mappedInput.hasTouch() ? tr(STR_TAP_BOTTOM_TO_CANCEL) : tr(STR_BACK_TO_CANCEL);
     const auto hints = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");

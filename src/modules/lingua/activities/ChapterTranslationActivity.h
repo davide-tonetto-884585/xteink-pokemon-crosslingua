@@ -96,6 +96,8 @@ class ChapterTranslationActivity final : public Activity {
   volatile int liveTranslated = 0;
   volatile int liveFailed = 0;
   unsigned long runStartMillis = 0;
+  // Rough run time from the chapter's size, for the static progress screen (0 = unknown).
+  unsigned long estimatedSeconds = 0;
   unsigned long runEndMillis = 0;
 
   void resolveChapterInfo();
