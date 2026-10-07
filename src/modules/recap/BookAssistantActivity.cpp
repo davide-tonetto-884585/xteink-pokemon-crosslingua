@@ -13,6 +13,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/ActivityResult.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -688,6 +689,14 @@ bool BookAssistantActivity::tryRestoreFramebuffer() {
 
 void BookAssistantActivity::restoreFramebuffer(const bool alreadyLocked) {
   if (renderer.hasFrameBuffer()) return;
+  // Wi-Fi holds ~55 KB; on an X3 the 48 KB block cannot come back while it is up. Another
+  // question reconnects through launchWifiOrStart().
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    WiFi.disconnect(false);
+    delay(100);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+  }
   for (int attempt = 0; attempt < 5; attempt++) {
     bool ok;
     if (alreadyLocked) {
@@ -701,8 +710,9 @@ void BookAssistantActivity::restoreFramebuffer(const bool alreadyLocked) {
     LOG_ERR("RECAP", "Framebuffer realloc failed (attempt %d/5)", attempt + 1);
     delay(100);
   }
-  LOG_ERR("RECAP", "Framebuffer realloc permanently failed; restarting");
-  ESP.restart();
+  // Restart without the boot splash, straight back to the book (the assistant opens from it).
+  LOG_ERR("RECAP", "Framebuffer realloc permanently failed; silent restart");
+  silentRestartToReader();
 }
 
 // ─── layout & input ──────────────────────────────────────────────────────────

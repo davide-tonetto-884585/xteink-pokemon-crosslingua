@@ -23,6 +23,11 @@
 #if !defined(SIMULATOR) && !FREEINK_MCU_C3
 #include <XteinkDetect.h>
 #endif
+#if !defined(SIMULATOR)
+#include <mbedtls/aes.h>
+#include <mbedtls/bignum.h>
+#include <mbedtls/sha256.h>
+#endif
 #include <builtinFonts/all.h>
 #include <uzlib.h>
 
@@ -379,6 +384,13 @@ static void clearSilentRestartReaderPageBuild() {
   silentReaderPageBuildFlags = 0;
 }
 
+// The framebuffer can be released for a Lingua/OTA network phase when a
+// restart is the recovery path; drawing the popup then would write through a
+// null buffer. The panel keeps its last frame instead.
+static void drawSilentRestartPopup() {
+  if (renderer.hasFrameBuffer()) GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+}
+
 static void silentRestartToHome(const uint32_t payload, const char* const description) {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
   clearSilentRestartReaderPageBuild();
@@ -390,7 +402,7 @@ static void silentRestartToHome(const uint32_t payload, const char* const descri
   // Without an overlay, users don't see the reboot and fire input through to
   // Home. Select on the default selectorIndex=0 then opens the most-recent
   // book, looking like a trampoline back to the reader they just exited.
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  drawSilentRestartPopup();
   delay(50);
   restartWithSilentToken();
 }
@@ -435,7 +447,7 @@ static void silentRestartToReaderImpl(const bool cleanImageBaseOnEntry) {
   silentRebootPayload = cleanImageBaseOnEntry ? SILENT_REBOOT_READER_CLEAN_IMAGE_BASE : 0;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=reader cleanImageBase=%d)", cleanImageBaseOnEntry ? 1 : 0);
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  drawSilentRestartPopup();
   delay(50);
   restartWithSilentToken();
 }
@@ -450,7 +462,7 @@ void silentRestartToNetwork(const NetworkBootTarget target, const uint32_t paylo
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=network/%lu payload=%lu)", static_cast<unsigned long>(silentRebootTarget),
           static_cast<unsigned long>(payload));
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  drawSilentRestartPopup();
   delay(50);
   restartWithSilentToken();
 }
@@ -1174,6 +1186,43 @@ void setupDisplayAndFonts(const bool seamless, const bool loadReaderResources, c
   }
 }
 
+#if !defined(SIMULATOR)
+// ESP-IDF creates the hardware-crypto locks (_lock_t in esp_crypto_lock.c) and newlib's time-zone
+// lock lazily, as small heap mutexes, on their first use. Left to the first TLS handshake, that
+// happens after Lingua/Recap freed the 48 KB framebuffer for the connection, so a mutex lands in
+// that hole for good and the framebuffer can no longer come back on X3 (largest block ~36 KB).
+// Touch MPI, SHA/AES and the time conversions once at boot so they are allocated up front.
+static void prewarmLazyNetworkLocks() {
+  mbedtls_mpi r, x, e, n;
+  mbedtls_mpi_init(&r);
+  mbedtls_mpi_init(&x);
+  mbedtls_mpi_init(&e);
+  mbedtls_mpi_init(&n);
+  if (mbedtls_mpi_lset(&x, 3) == 0 && mbedtls_mpi_lset(&e, 5) == 0 && mbedtls_mpi_lset(&n, 7) == 0) {
+    mbedtls_mpi_exp_mod(&r, &x, &e, &n, nullptr);
+  }
+  mbedtls_mpi_free(&r);
+  mbedtls_mpi_free(&x);
+  mbedtls_mpi_free(&e);
+  mbedtls_mpi_free(&n);
+
+  unsigned char digest[32];
+  mbedtls_sha256(reinterpret_cast<const unsigned char*>("x"), 1, digest, 0);
+
+  const unsigned char key[16] = {};
+  unsigned char block[16] = {};
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  if (mbedtls_aes_setkey_enc(&aes, key, 128) == 0) mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, block, block);
+  mbedtls_aes_free(&aes);
+
+  const time_t now = 0;
+  struct tm tm {};
+  gmtime_r(&now, &tm);
+  localtime_r(&now, &tm);
+}
+#endif
+
 void setup() {
 #ifdef SIMULATOR
   SimulatorLifecycle::restoreSilentRebootToken(silentRebootMagic, silentRebootTarget, silentRebootPayload);
@@ -1375,6 +1424,9 @@ void setup() {
   }
 
   LOG_DBG("MAIN", "Starting CrossInk version %s", AppVersion::version());
+#if !defined(SIMULATOR)
+  prewarmLazyNetworkLocks();
+#endif
   logMemoryStats("Boot");
 
   // Resolve the single boot-presentation decision. Skipping the splash also

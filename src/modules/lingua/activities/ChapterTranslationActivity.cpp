@@ -13,6 +13,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/ActivityResult.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -26,6 +27,8 @@
 // Sentinel value LanguagePickerActivity returns for the synthetic "Auto-detect" entry.
 // Matches CrossPointSettings::sourceTranslationLanguage's 0xFF sentinel.
 static constexpr uint8_t AUTO_DETECT_SENTINEL = 0xFF;
+// Framebuffer realloc attempts (100 ms apart) before the silent-restart fallback.
+static constexpr int RESTORE_ATTEMPTS = 20;
 
 // ─── epub (re)loading ───────────────────────────────────────────────────────
 
@@ -333,7 +336,22 @@ void ChapterTranslationActivity::releaseFramebuffer() {
 void ChapterTranslationActivity::restoreFramebuffer(bool alreadyLocked) {
   if (renderer.hasFrameBuffer()) return;  // idempotent: nothing to restore
 
-  for (int attempt = 0; attempt < 5; attempt++) {
+  // Once the worker has finished with it, drop the lean Epub (ensureEpubLoaded
+  // reloads it on a retry) so its allocations do not split the 48 KB hole.
+  if (taskDone || taskFailed) epub.reset();
+
+  // Wi-Fi holds ~55 KB; on an X3 the 48 KB block cannot come back while it is up.
+  // A retry reconnects through launchWifiOrStart().
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    WiFi.disconnect(false);
+    delay(100);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+  }
+
+  // Wi-Fi teardown and the worker task's stack are freed asynchronously, so
+  // give the heap up to ~2 s to coalesce before giving up.
+  for (int attempt = 0; attempt < RESTORE_ATTEMPTS; attempt++) {
     bool ok;
     if (alreadyLocked) {
       // onExit() already holds the RenderLock via exitActivity(); taking the
@@ -348,16 +366,21 @@ void ChapterTranslationActivity::restoreFramebuffer(bool alreadyLocked) {
       LOG_DBG("MEM", "CT post-restore: free=%u max=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
       return;
     }
-    LOG_ERR("CHT", "Framebuffer realloc failed (attempt %d/5)", attempt + 1);
+    LOG_ERR("CHT", "Framebuffer realloc failed (attempt %d/%d, free=%u maxAlloc=%u)", attempt + 1, RESTORE_ATTEMPTS,
+            (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     delay(100);
   }
 
-  // Practically unreachable: restore runs only after the rewriter/HTTP/expat
-  // transients (~35+ KB) have been freed, so a clean 48 KB hole is available. If it
-  // still fails the device has no buffer to draw on; restart to recover. The
-  // translated HTML is already committed to SD and the reader re-reads it on relaunch.
-  LOG_ERR("CHT", "Framebuffer realloc permanently failed; restarting");
-  ESP.restart();
+  // The heap is too fragmented for a 48 KB block (seen on X3 after a cancel with
+  // Wi-Fi just torn down): restart without the boot splash, straight back to where
+  // the user came from. The translated HTML is already committed to SD and the
+  // reader re-reads it on relaunch.
+  LOG_ERR("CHT", "Framebuffer realloc permanently failed; silent restart");
+  if (returnTarget == TranslationReturnTarget::READER) {
+    silentRestartToReader();
+  } else {
+    silentRestart();
+  }
 }
 
 bool ChapterTranslationActivity::tryRestoreFramebuffer() {
