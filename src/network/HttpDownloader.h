@@ -70,6 +70,9 @@ class HttpDownloader {
   // Lingua: TLS heap floors the translation activities apply before starting a chapter's requests.
   static constexpr uint32_t MIN_FREE_HEAP_FOR_TLS = 45000;
   static constexpr uint32_t MIN_MAX_ALLOC_FOR_TLS = 20000;
+  // Heap a batch needs next to an open ReusableHttpSession (paragraph, URL-encoded copy, response).
+  static constexpr uint32_t SESSION_MIN_FREE_HEAP = 16000;
+  static constexpr uint32_t SESSION_MIN_MAX_ALLOC = 8000;
   static constexpr uint32_t MIN_FREE_HEAP_FOR_REUSE = 12000;
 
   /**
@@ -135,30 +138,52 @@ class HttpDownloader {
 };
 
 /**
- * Lingua: a burst of requests to the same origin (one chapter's translation batches). On this
- * firmware every request delegates to the matching HttpDownloader static (one connection per
- * request), so behavior is identical to not using a session; the class keeps the translator's
- * interface and its heap backpressure.
+ * Lingua: a burst of requests to the same origin (one chapter's translation batches). The session
+ * keeps one HTTPS connection open across requests, so the TLS handshake - by far the largest heap
+ * peak of a request (~55 KB on an X3 with Wi-Fi up, leaving only a few KB) - runs once per origin
+ * instead of once per paragraph. Requests follow the matching HttpDownloader statics' contracts
+ * (status handling; post/postJson set lastHttpCode/lastErrorName, fetchUrl leaves them alone). A
+ * request that fails on a reused connection (the server may have closed it) is retried once on a
+ * fresh one. The connection is closed by the destructor. The simulator's HTTP client has no
+ * per-request setters, so there every request delegates to the HttpDownloader statics.
  */
 class ReusableHttpSession {
  public:
   ReusableHttpSession() = default;
-  ~ReusableHttpSession() = default;
+  ~ReusableHttpSession() { close(); }
   ReusableHttpSession(const ReusableHttpSession&) = delete;
   ReusableHttpSession& operator=(const ReusableHttpSession&) = delete;
 
-  bool fetchUrl(const std::string& url, std::string& outContent) { return HttpDownloader::fetchUrl(url, outContent); }
+  bool fetchUrl(const std::string& url, std::string& outContent);
   bool post(const std::string& url, const std::string& body, const char* contentType, const char* extraHeaderName,
-            const char* extraHeaderValue, std::string& outContent) {
-    return HttpDownloader::post(url, body, contentType, extraHeaderName, extraHeaderValue, outContent);
-  }
+            const char* extraHeaderValue, std::string& outContent);
   bool postJson(const std::string& url, const std::string& jsonBody, const std::string& authHeader,
                 std::string& outContent) {
-    return HttpDownloader::postJson(url, jsonBody, authHeader, outContent);
+    const char* authName = authHeader.empty() ? nullptr : "Authorization";
+    const char* authValue = authHeader.empty() ? nullptr : authHeader.c_str();
+    return post(url, jsonBody, "application/json", authName, authValue, outContent);
   }
 
   // Heap backpressure before a request's TLS connect: waits (feeding the watchdog) until the heap
   // can support a handshake, or until timeoutMs elapses / *cancelFlag is set. Returns false only on
   // a genuine timeout or cancel.
   bool waitForHeapReady(uint32_t timeoutMs, volatile const bool* cancelFlag);
+
+  // Closes the open connection, freeing its TLS buffers; the next request reconnects.
+  void close();
+
+ private:
+  bool request(bool isPost, const std::string& url, const std::string& body, const char* contentType,
+               const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent, int& outStatus,
+               const char** outErrorName);
+  bool requestOnce(bool isPost, const std::string& url, const std::string& body, const char* contentType,
+                   const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent,
+                   int& outStatus, const char** outErrorName, bool& transportFailed);
+  bool ensureClient(const std::string& url);
+
+  void* client = nullptr;       // esp_http_client_handle_t of the open connection
+  std::string origin;           // scheme://host[:port] the open client is bound to
+  int txBufferSize = 0;         // request-line buffer the client was created with
+  std::string extraHeader;      // per-request header last set, cleared before the next request
+  bool contentTypeSet = false;
 };

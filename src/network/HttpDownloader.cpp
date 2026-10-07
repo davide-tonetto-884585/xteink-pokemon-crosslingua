@@ -687,6 +687,16 @@ bool HttpDownloader::postJson(const std::string& url, const std::string& jsonBod
 }
 
 bool ReusableHttpSession::waitForHeapReady(const uint32_t timeoutMs, volatile const bool* cancelFlag) {
+  // An open connection needs no handshake, and its own buffers are what keeps the heap below the
+  // handshake floor; a dropped one is closed (freeing them) before request() reconnects. Once the
+  // heap left around it gets too low or fragmented for a batch's strings, close it instead: the
+  // ~40 KB it frees is what a fresh handshake needs, and it beats an allocation failure mid-batch.
+  if (client) {
+    if (ESP.getFreeHeap() >= HttpDownloader::SESSION_MIN_FREE_HEAP &&
+        ESP.getMaxAllocHeap() >= HttpDownloader::SESSION_MIN_MAX_ALLOC) return true;
+    LOG_DBG("HTTP", "Closing session for heap (free=%u maxAlloc=%u)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    close();
+  }
   const uint32_t start = millis();
   while (ESP.getFreeHeap() < HttpDownloader::MIN_FREE_HEAP_FOR_TLS ||
          ESP.getMaxAllocHeap() < HttpDownloader::MIN_MAX_ALLOC_FOR_TLS) {
@@ -700,6 +710,171 @@ bool ReusableHttpSession::waitForHeapReady(const uint32_t timeoutMs, volatile co
   }
   return true;
 }
+
+#if defined(SIMULATOR)
+void ReusableHttpSession::close() {}
+
+bool ReusableHttpSession::fetchUrl(const std::string& url, std::string& outContent) {
+  return HttpDownloader::fetchUrl(url, outContent);
+}
+
+bool ReusableHttpSession::post(const std::string& url, const std::string& body, const char* contentType,
+                               const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent) {
+  return HttpDownloader::post(url, body, contentType, extraHeaderName, extraHeaderValue, outContent);
+}
+#else
+namespace {
+// "scheme://host[:port]" of a URL: requests to the same origin can share one connection.
+std::string urlOrigin(const std::string& url) {
+  const size_t schemeEnd = url.find("://");
+  if (schemeEnd == std::string::npos) return url;
+  const size_t pathStart = url.find_first_of("/?#", schemeEnd + 3);
+  return pathStart == std::string::npos ? url : url.substr(0, pathStart);
+}
+}  // namespace
+
+void ReusableHttpSession::close() {
+  if (client) {
+    esp_http_client_cleanup(static_cast<esp_http_client_handle_t>(client));
+    client = nullptr;
+  }
+  origin.clear();
+  txBufferSize = 0;
+  extraHeader.clear();
+  contentTypeSet = false;
+}
+
+bool ReusableHttpSession::ensureClient(const std::string& url) {
+  const std::string wantedOrigin = urlOrigin(url);
+  const int wantedTx = txBufferSizeFor(url);
+  // The request line is built in the TX buffer sized at init, so a longer URL needs a new client.
+  if (client && (wantedOrigin != origin || wantedTx > txBufferSize)) close();
+  if (client) return true;
+
+  // Size the TX buffer with headroom so a slightly longer paragraph does not force a reconnect.
+  const int tx = wantedTx > 2 * HTTP_TX_BUF ? wantedTx : 2 * HTTP_TX_BUF;
+  esp_http_client_config_t config = {};
+  config.url = url.c_str();
+  config.buffer_size = HTTP_RX_BUF;
+  config.buffer_size_tx = tx;
+  config.timeout_ms = HTTP_TIMEOUT_MS;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.keep_alive_enable = true;
+  config.event_handler = collectResponseBody;
+  esp_http_client_handle_t handle = esp_http_client_init(&config);
+  if (!handle) {
+    LOG_ERR("HTTP", "Session client init failed");
+    logNetworkState("Session client init failure");
+    return false;
+  }
+  esp_http_client_set_header(handle, "User-Agent", AppVersion::userAgent());
+  client = handle;
+  origin = wantedOrigin;
+  txBufferSize = tx;
+  return true;
+}
+
+bool ReusableHttpSession::requestOnce(const bool isPost, const std::string& url, const std::string& body,
+                                      const char* contentType, const char* extraHeaderName,
+                                      const char* extraHeaderValue, std::string& outContent, int& outStatus,
+                                      const char** outErrorName, bool& transportFailed) {
+  transportFailed = false;
+  outContent.clear();
+  outStatus = -1;
+  if (outErrorName) *outErrorName = nullptr;
+  if (!ensureClient(url)) {
+    if (outErrorName) *outErrorName = "client init failed";
+    return false;
+  }
+
+  const auto handle = static_cast<esp_http_client_handle_t>(client);
+  esp_http_client_set_url(handle, url.c_str());
+  esp_http_client_set_method(handle, isPost ? HTTP_METHOD_POST : HTTP_METHOD_GET);
+  esp_http_client_set_user_data(handle, &outContent);
+  if (contentType && *contentType) {
+    esp_http_client_set_header(handle, "Content-Type", contentType);
+    contentTypeSet = true;
+  } else if (contentTypeSet) {
+    esp_http_client_delete_header(handle, "Content-Type");
+    contentTypeSet = false;
+  }
+  if (!extraHeader.empty() && (!extraHeaderName || extraHeader != extraHeaderName)) {
+    esp_http_client_delete_header(handle, extraHeader.c_str());
+    extraHeader.clear();
+  }
+  if (extraHeaderName && extraHeaderValue) {
+    esp_http_client_set_header(handle, extraHeaderName, extraHeaderValue);
+    extraHeader = extraHeaderName;
+  }
+  if (isPost && !body.empty()) {
+    esp_http_client_set_post_field(handle, body.c_str(), static_cast<int>(body.size()));
+  } else {
+    esp_http_client_set_post_field(handle, nullptr, 0);
+  }
+
+  const esp_err_t err = esp_http_client_perform(handle);
+  esp_http_client_set_user_data(handle, nullptr);
+  if (err != ESP_OK) {
+    // Same 401 handling as runBufferedRequest: a complete error response still has a status.
+    const int status = esp_http_client_get_status_code(handle);
+    if (status >= 400) {
+      LOG_ERR("HTTP", "Session request status %d (%s, %u byte body)", status, esp_err_to_name(err),
+              static_cast<unsigned>(outContent.size()));
+      outStatus = status;
+      close();
+      return false;
+    }
+    LOG_ERR("HTTP", "Session request failed: %s", esp_err_to_name(err));
+    logTlsError(handle, "Session request");
+    logNetworkState("Session request failure");
+    if (outErrorName) *outErrorName = esp_err_to_name(err);
+    close();
+    transportFailed = true;
+    return false;
+  }
+  outStatus = esp_http_client_get_status_code(handle);
+  if (outStatus != 200) {
+    LOG_ERR("HTTP", "Session request status %d (%u byte body)", outStatus, static_cast<unsigned>(outContent.size()));
+    return false;
+  }
+  return true;
+}
+
+bool ReusableHttpSession::request(const bool isPost, const std::string& url, const std::string& body,
+                                  const char* contentType, const char* extraHeaderName, const char* extraHeaderValue,
+                                  std::string& outContent, int& outStatus, const char** outErrorName) {
+  WifiPowerSaveGuard wifiPowerSaveGuard;
+  (void)wifiPowerSaveGuard;
+  const bool reused = client != nullptr && urlOrigin(url) == origin;
+  bool transportFailed = false;
+  if (requestOnce(isPost, url, body, contentType, extraHeaderName, extraHeaderValue, outContent, outStatus,
+                  outErrorName, transportFailed)) {
+    return true;
+  }
+  // A kept-alive connection the server has since closed fails at the transport level; one retry
+  // on a fresh connection tells that apart from a real failure.
+  if (!reused || !transportFailed) return false;
+  LOG_DBG("HTTP", "Session connection dropped; retrying on a new connection");
+  return requestOnce(isPost, url, body, contentType, extraHeaderName, extraHeaderValue, outContent, outStatus,
+                     outErrorName, transportFailed);
+}
+
+bool ReusableHttpSession::fetchUrl(const std::string& url, std::string& outContent) {
+  int status = -1;
+  // Like HttpDownloader::fetchUrl, a GET leaves lastHttpCode/lastErrorName untouched.
+  return request(false, url, std::string(), nullptr, nullptr, nullptr, outContent, status, nullptr);
+}
+
+bool ReusableHttpSession::post(const std::string& url, const std::string& body, const char* contentType,
+                               const char* extraHeaderName, const char* extraHeaderValue, std::string& outContent) {
+  LOG_DBG("HTTP", "Session POST (body=%u bytes)", static_cast<unsigned>(body.size()));
+  int status = -1;
+  const bool ok = request(true, url, body, contentType, extraHeaderName, extraHeaderValue, outContent, status,
+                          &HttpDownloader::lastErrorName);
+  HttpDownloader::lastHttpCode = status;
+  return ok;
+}
+#endif  // SIMULATOR
 
 bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
                               const std::string& password, const char* userAgent) {
