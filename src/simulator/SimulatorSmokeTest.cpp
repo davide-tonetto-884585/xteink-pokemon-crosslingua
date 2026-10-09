@@ -2259,12 +2259,13 @@ class SimulatorSmokeTest {
     scriptIndex = 0;
     inputScript.push_back(assertActivity("Home"));
 
-    // Standard themes render Browse, Recent Books, File Transfer, Pokemon,
-    // then Settings. Minimal and Dashboard expose Menu, Browse, and Settings.
+    // Standard themes render Browse, Recent Books, File Transfer, then
+    // Settings; the Pokemon band above the menu replaces the menu's Pokemon
+    // entry. Minimal and Dashboard expose Menu, Browse, and Settings.
     if (homeNavigationUsesCarouselInteraction()) {
-      for (int index = 0; index < 4; ++index) addTap(MappedInputManager::Button::Right);
+      for (int index = 0; index < 3; ++index) addTap(MappedInputManager::Button::Right);
     } else {
-      const int downPresses = homeNavigationUsesMinimalInteraction() ? 3 : 4;
+      const int downPresses = 3;
       for (int index = 0; index < downPresses; ++index) addTap(MappedInputManager::Button::Down);
     }
     inputScript.push_back(render("Home Settings selected", 3));

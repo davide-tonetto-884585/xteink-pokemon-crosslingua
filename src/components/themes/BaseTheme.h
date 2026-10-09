@@ -173,7 +173,8 @@ enum UIIcon {
   Opds,
   Wifi,
   Hotspot,
-  Chart
+  Chart,
+  Pokeball
 };
 
 // Default theme implementation (Classic Theme)
