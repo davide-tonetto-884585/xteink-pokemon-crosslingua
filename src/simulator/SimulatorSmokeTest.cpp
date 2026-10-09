@@ -256,6 +256,11 @@ class SimulatorSmokeTest {
 
   static bool homeNavigationMode() { return std::getenv("CROSSINK_SIMULATOR_HOME_NAVIGATION") != nullptr; }
 
+  static bool homeNavigationUsesCoverGrid() {
+    const char* raw = std::getenv("CROSSINK_SIMULATOR_SMOKE_THEME");
+    return raw != nullptr && raw[0] != '\0' && std::atoi(raw) == CrossPointSettings::UI_THEME::COVER_GRID;
+  }
+
   static bool homeNavigationUsesMinimalInteraction() {
     const char* raw = std::getenv("CROSSINK_SIMULATOR_SMOKE_THEME");
     if (raw == nullptr || raw[0] == '\0') return false;
@@ -2142,7 +2147,7 @@ class SimulatorSmokeTest {
 
       case SmokeStep::Done:
         if (SETTINGS.uiTheme == CrossPointSettings::LYRA_CAROUSEL && carouselCachePass == 0 &&
-            std::getenv("CROSSINK_SIMULATOR_SMOKE_BOOK")) {
+            std::getenv("CROSSINK_SIMULATOR_SMOKE_BOOK") && !RECENT_BOOKS.getBooks().empty()) {
           const RecentBook book = RECENT_BOOKS.getBooks().front();
           for (const char* path : {"/books/carousel-second.txt", "/books/carousel-third.txt"}) {
             if (!Storage.writeFile(path, "Carousel side cover fixture")) fail("Cannot create carousel fixture");
@@ -2259,16 +2264,25 @@ class SimulatorSmokeTest {
     scriptIndex = 0;
     inputScript.push_back(assertActivity("Home"));
 
-    // Standard themes render Browse, Recent Books, File Transfer, Pokemon,
-    // then Settings. Minimal and Dashboard expose Menu, Browse, and Settings.
+    // Standard themes render Browse, Recent Books, File Transfer, then
+    // Settings; the Pokemon band above the menu replaces the menu's Pokemon
+    // entry. Minimal and Dashboard map their four front buttons to Menu,
+    // Browse, Settings and Read: Left is Settings. The Cover Grid keeps its
+    // icons in a bar, Settings last.
     if (homeNavigationUsesCarouselInteraction()) {
-      for (int index = 0; index < 4; ++index) addTap(MappedInputManager::Button::Right);
+      for (int index = 0; index < 3; ++index) addTap(MappedInputManager::Button::Right);
+    } else if (homeNavigationUsesMinimalInteraction()) {
+      addTap(MappedInputManager::Button::Left);
+    } else if (homeNavigationUsesCoverGrid()) {
+      // Up lands in the books, wherever Home started; Left then steps into the
+      // icon bar from its end, where Settings is.
+      addTap(MappedInputManager::Button::Up);
+      addTap(MappedInputManager::Button::Left);
     } else {
-      const int downPresses = homeNavigationUsesMinimalInteraction() ? 3 : 4;
-      for (int index = 0; index < downPresses; ++index) addTap(MappedInputManager::Button::Down);
+      for (int index = 0; index < 3; ++index) addTap(MappedInputManager::Button::Down);
     }
     inputScript.push_back(render("Home Settings selected", 3));
-    addTap(MappedInputManager::Button::Confirm);
+    if (!homeNavigationUsesMinimalInteraction()) addTap(MappedInputManager::Button::Confirm);
     inputScript.push_back(render("Settings opened from Home", 4));
     inputScript.push_back(assertActivity("Settings"));
     LOG_INF("SMOKE", "Running Home navigation to Settings using theme index %d", static_cast<int>(SETTINGS.uiTheme));
