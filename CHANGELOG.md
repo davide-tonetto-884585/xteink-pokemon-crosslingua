@@ -1,3 +1,17 @@
+## [Unreleased]
+
+### Changed
+
+- Merged the Pokémon changes from the Xteink Pokémon game v1.8.0 release (only the game; its Applications, Game Boy emulator, feature switches, Save Transfer and Nearby Sync are not part of this merge):
+  - The Cover Grid Home theme now opens the Pokémon game: its last cover is a Pokémon tile showing your party leader with its name and level (or a Poké Ball before you pick a starter), and the icon bar gains Slideshow. The grid shows five recent books instead of six to make room.
+  - On every other Home theme, the band showing your party leader opens the Pokémon game: tap it, or select it with the buttons (Up/Down; on Minimal and Dashboard the side buttons, then Open) and press Confirm. It replaces the Home menu's Pokémon entry, which comes back if you hide the band in the game's settings. Before you pick a starter, it shows a Poké Ball and "Choose your starter". The Pokémon entry in the Home menu has a Poké Ball icon.
+  - Smarter Gym Leaders, Elite Four and Champion: they pick moves by the damage they would actually do and go for a knockout when one is there, and only use status moves when they would work. Early Gym Leaders still make mistakes now and then; the Elite Four and the Champion almost never do. Wild Pokémon fight as before.
+  - Trainers heal when your next attack would knock their Pokémon out (and not when it would be knocked out even at full HP), and decide whether to switch from the moves your Pokémon actually has rather than its type.
+
+### Fixed
+
+- A Pokémon a trainer withdrew came back later at full HP. It now comes back with the HP, PP and status it left with.
+
 ## [1.11.4] - 2026-10-07
 
 ### Fixed
