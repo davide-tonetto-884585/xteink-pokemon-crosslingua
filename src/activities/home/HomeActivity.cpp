@@ -2256,7 +2256,7 @@ void HomeActivity::render(RenderLock&&) {
   bool showPokemonAccessory = false;
 #if defined(CROSSINK_ENABLE_POKEMON)
   showPokemonAccessory = pokemonBandOnHome;
-  pokemonAccessoryRect_ = {};
+  pokemonAccessoryRect_ = Rect{};
 #endif
 
   if (coverGridUi) {
