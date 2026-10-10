@@ -104,13 +104,13 @@ constexpr int BALL_CY = 300;
 constexpr int BALL_R = 222;
 constexpr int WIN_R = 188;
 constexpr int RIM_W = 12;
-constexpr int SCENE_H = 548;
-constexpr int VY = 256;  // vanishing point row
-constexpr int F_PX = 300;
-constexpr int H_MM = 2300;   // camera height
-constexpr int W_MM = 3200;   // room half width
-constexpr int ZB_MM = 7400;  // back wall depth
-constexpr int CH_MM = 4400;  // ceiling height
+constexpr int BALL_SCENE_H = 548;
+constexpr int BALL_VY = 256;  // vanishing point row
+constexpr int BALL_F = 300;   // focal length (px)
+constexpr int H_MM = 2300;    // camera height
+constexpr int W_MM = 3200;    // room half width
+constexpr int ZB_MM = 7400;   // back wall depth
+constexpr int CH_MM = 4400;   // ceiling height
 constexpr int BUTTON_R = 25;
 
 constexpr float Hm = H_MM / 1000.0f;
@@ -428,7 +428,12 @@ struct ShelfInfo {
 class SleepRoomBuilder {
  public:
   SleepRoomBuilder(SleepRoomRenderer& r, const SleepRoomSpec& spec)
-      : r_(r), spec_(spec), vx_(static_cast<float>(r.width_) / 2.0f), rng_(spec.seed * 2654435761u + 1) {
+      : r_(r),
+        spec_(spec),
+        vx_(static_cast<float>(r.width_) / 2.0f),
+        vyf_(static_cast<float>(r.vy_)),
+        fpx_(static_cast<float>(r.f_)),
+        rng_(spec.seed * 2654435761u + 1) {
     resetClip();
   }
 
@@ -445,7 +450,7 @@ class SleepRoomBuilder {
     clipX0_ = 0;
     clipX1_ = static_cast<int16_t>(r_.width_);
     clipY0_ = 0;
-    clipY1_ = SCENE_H;
+    clipY1_ = r_.sceneH_;
   }
   float rand(float lo, float hi) {
     rng_ ^= rng_ << 13;
@@ -455,10 +460,8 @@ class SleepRoomBuilder {
   }
 
   // --- projection
-  V2 P(float x, float y, float z) const {
-    return {vx_ + static_cast<float>(F_PX) * x / z, static_cast<float>(VY) - static_cast<float>(F_PX) * (y - Hm) / z};
-  }
-  float scaleAt(float z) const { return static_cast<float>(F_PX) / z; }  // px per metre
+  V2 P(float x, float y, float z) const { return {vx_ + fpx_ * x / z, vyf_ - fpx_ * (y - Hm) / z}; }
+  float scaleAt(float z) const { return fpx_ / z; }  // px per metre
 
   // --- paints
   int linear(V2 a, V2 b, const Stop* stops, int n) { return addPaint(1, a.x, a.y, b.x, b.y, stops, n); }
@@ -487,7 +490,7 @@ class SleepRoomBuilder {
       yMin = std::min(yMin, pts[i].y);
       yMax = std::max(yMax, pts[i].y);
     }
-    if (yMax < 0 || yMin > SCENE_H) return;
+    if (yMax < 0 || yMin > r_.sceneH_) return;
     SleepRoomRenderer::Prim& p = r.prims_[r.primCount_++];
     p = {};
     p.key = key_;
@@ -621,7 +624,7 @@ class SleepRoomBuilder {
     V2 o;
     float s;  // px per cm
   };
-  BB bb(float x, float y, float z) const { return {P(x, y, z), static_cast<float>(F_PX) / z / 100.0f}; }
+  BB bb(float x, float y, float z) const { return {P(x, y, z), fpx_ / z / 100.0f}; }
   static V2 L(const BB& b, float lx, float ly) { return {b.o.x + lx * b.s, b.o.y + ly * b.s}; }
   void bbPoly(const BB& b, const V2* local, int n, float lum, float alpha = 1.0f, int paint = -1, float rotDeg = 0) {
     V2 pts[48];
@@ -725,6 +728,8 @@ class SleepRoomBuilder {
   }
 
   float vx_;
+  float vyf_;
+  float fpx_;
   uint32_t rng_;
   int16_t key_ = 0;
   int16_t clipX0_ = 0, clipX1_ = 0, clipY0_ = 0, clipY1_ = 0;
@@ -2364,14 +2369,22 @@ void SleepRoomBuilder::build() {
     }
   }
 
-  // Sprite contact shadow on the bed, then the "z Z" drawn above the sprite.
+  // Sprite contact shadow on the bed, then the "z Z" by the top-right of the
+  // sprite's visible part.
   const float sz = 4.7f;
   const V2 c = P(0, bedTop_, sz);
+  float shownW = 100, shownH = 90;
+  if (r_.drawW_ > 0 && r_.sprite_.width > 0) {
+    shownW = static_cast<float>((r_.opaqueRight_ - r_.opaqueLeft_ + 1) * r_.drawW_) / r_.sprite_.width;
+    shownH = static_cast<float>((r_.opaqueBottom_ - r_.opaqueTop_ + 1) * r_.drawH_) / r_.sprite_.height;
+  }
   keyRaw(4705);
-  softShadow({c.x, c.y + 2}, scaleAt(sz) * .75f, 10, .5f);
+  softShadow({c.x, c.y + 2}, std::max(scaleAt(sz) * .75f, shownW * .55f), 10 + shownW * .04f, .5f);
   keyRaw(-500);
-  sleepZ(*this, c.x + 48, c.y - 104, 10);
-  sleepZ(*this, c.x + 62, c.y - 124, 14);
+  const float zs = r_.fullScreen_ ? 1.5f : 1.0f;
+  const float zx = c.x + shownW * .42f, zy = c.y - shownH;
+  sleepZ(*this, zx, zy - 6 * zs, 10 * zs);
+  sleepZ(*this, zx + 14 * zs, zy - 26 * zs, 14 * zs);
 
   r_.spriteBaseX_ = static_cast<int>(std::lround(c.x));
   r_.spriteBaseY_ = static_cast<int>(std::lround(c.y));
@@ -2396,12 +2409,76 @@ void SleepRoomRenderer::release() {
   primCount_ = vertCount_ = paintCount_ = 0;
 }
 
-bool SleepRoomRenderer::build(const SleepRoomSpec& spec, const int screenWidth) {
+void SleepRoomRenderer::setSprite(const SleepRoomSprite& sprite) {
+  sprite_ = sprite;
+  drawW_ = drawH_ = 0;
+  const bool gray = sprite.gray4 != nullptr;
+  if (sprite.width <= 0 || sprite.height <= 0 || (!gray && (sprite.ink == nullptr || sprite.opaque == nullptr))) {
+    sprite_ = {};
+    return;
+  }
+  // Bounding box of the Pokemon itself, so it stands on the bed whatever
+  // margin the artwork keeps around it.
+  opaqueLeft_ = sprite.width;
+  opaqueTop_ = sprite.height;
+  opaqueRight_ = opaqueBottom_ = -1;
+  for (int y = 0; y < sprite.height; ++y) {
+    for (int x = 0; x < sprite.width; ++x) {
+      bool solid;
+      if (gray) {
+        const uint8_t byte = sprite.gray4[y * ((sprite.width + 1) / 2) + x / 2];
+        solid = ((x & 1) ? (byte & 0x0F) : (byte >> 4)) != SLEEP_ROOM_GRAY4_TRANSPARENT;
+      } else {
+        solid = (sprite.opaque[y * ((sprite.width + 7) / 8) + x / 8] >> (7 - (x & 7))) & 1;
+      }
+      if (!solid) continue;
+      opaqueLeft_ = std::min(opaqueLeft_, x);
+      opaqueRight_ = std::max(opaqueRight_, x);
+      opaqueTop_ = std::min(opaqueTop_, y);
+      opaqueBottom_ = std::max(opaqueBottom_, y);
+    }
+  }
+  if (opaqueRight_ < 0) {
+    sprite_ = {};
+    return;
+  }
+}
+
+bool SleepRoomRenderer::build(const SleepRoomSpec& spec, const int screenWidth, const int screenHeight) {
   release();
   spec_ = spec;
   spec_.tier = static_cast<uint8_t>(clampi(spec.tier, 1, SLEEP_ROOM_TIER_COUNT));
   width_ = screenWidth;
+  height_ = screenHeight;
   ballCx_ = screenWidth / 2;
+  fullScreen_ = spec.layout == SleepRoomLayout::FullScreen;
+  if (fullScreen_) {
+    // Closer camera: the room fills the screen and the bed sits above the
+    // label panel.
+    f_ = std::max(1, screenWidth * 7 / 8);
+    vy_ = screenHeight * 34 / 100;
+    sceneH_ = screenHeight;
+    panelBottom_ = screenHeight - 14;
+    panelTop_ = screenHeight - 168;
+  } else {
+    f_ = BALL_F;
+    vy_ = BALL_VY;
+    sceneH_ = BALL_SCENE_H;
+    panelTop_ = panelBottom_ = 0;
+  }
+  // On-screen size of the sleeping Pokemon: portraits are drawn large, 1-bit
+  // sprites at a whole multiple of their size so their pixels stay crisp.
+  if (sprite_.width > 0) {
+    if (sprite_.gray4 != nullptr) {
+      const int target = fullScreen_ ? screenWidth * 5 / 8 : 170;
+      drawH_ = target;
+      drawW_ = sprite_.width * target / sprite_.height;
+    } else {
+      const int scale = fullScreen_ ? 2 : 1;
+      drawW_ = sprite_.width * scale;
+      drawH_ = sprite_.height * scale;
+    }
+  }
   overflow_ = false;
   prims_ = new (std::nothrow) Prim[MAX_PRIMS];
   verts_ = new (std::nothrow) Vertex[MAX_VERTS];
@@ -2413,7 +2490,7 @@ bool SleepRoomRenderer::build(const SleepRoomSpec& spec, const int screenWidth) 
   }
   for (int x = 0; x < screenWidth; ++x) {
     const int hx = std::abs(2 * x + 1 - 2 * ballCx_);
-    sideT_[x] = hx == 0 ? INT32_MAX : W_MM * 2 * F_PX / hx;
+    sideT_[x] = hx == 0 ? INT32_MAX : W_MM * 2 * f_ / hx;
   }
   SleepRoomBuilder builder(*this, spec_);
   builder.build();
@@ -2431,7 +2508,7 @@ bool SleepRoomRenderer::build(const SleepRoomSpec& spec, const int screenWidth) 
   return true;
 }
 
-int SleepRoomRenderer::sceneHeight() const { return SCENE_H; }
+int SleepRoomRenderer::sceneHeight() const { return sceneH_; }
 int SleepRoomRenderer::buttonCenterX() const { return ballCx_; }
 int SleepRoomRenderer::buttonCenterY() const { return BALL_CY + BALL_R - 16; }
 int SleepRoomRenderer::buttonRadius() const { return BUTTON_R; }
@@ -2441,8 +2518,8 @@ uint8_t SleepRoomRenderer::shadeRoom(const int x, const int y, const int rowT, c
   // depends only on the row and the side-wall depth only on the column, so
   // both divisions are hoisted out of the per-pixel path.
   const int hx = 2 * x + 1 - 2 * ballCx_;
-  const int hy = 2 * VY - (2 * y + 1);
-  constexpr int F2 = 2 * F_PX;
+  const int hy = 2 * vy_ - (2 * y + 1);
+  const int F2 = 2 * f_;
   int t = rowT;
   int surface = rowSurface;  // 0 back, 1 floor, 2 ceiling, 3 left, 4 right
   const int ts = sideT_[x];
@@ -2453,7 +2530,7 @@ uint8_t SleepRoomRenderer::shadeRoom(const int x, const int y, const int rowT, c
   const int wx = t * hx / F2;         // mm
   const int wy = H_MM + t * hy / F2;  // mm
   const int wz = t;
-  const int mpp = std::max(1, t / F_PX);
+  const int mpp = std::max(1, t / f_);
   const uint8_t tier = spec_.tier;
   const uint32_t seed = spec_.seed;
   int lum = 0;
@@ -2631,8 +2708,7 @@ uint8_t SleepRoomRenderer::shadeShell(const int x, const int y, uint8_t room) co
         lum = 0;
       } else {
         const int gx = x - (ballCx_ - BUTTON_R * 24 / 100), gy = y - (buttonCenterY() - BUTTON_R * 36 / 100);
-        const int t =
-            static_cast<int>(isqrt32(static_cast<uint32_t>(gx * gx + gy * gy))) * 255 / (BUTTON_R * 8 / 5);
+        const int t = static_cast<int>(isqrt32(static_cast<uint32_t>(gx * gx + gy * gy))) * 255 / (BUTTON_R * 8 / 5);
         lum = t < 153 ? 255 - 31 * t / 153 : 224 - 86 * clampi(t - 153, 0, 102) / 102;
       }
     }
@@ -2754,45 +2830,105 @@ inline void evalStops(const SleepRoomRenderer::Paint& p, const int t, int& lum, 
 }  // namespace
 
 void SleepRoomRenderer::drawSpriteRow(const int y, uint8_t* out, const int x0, const int x1) const {
-  if (sprite_.ink == nullptr || sprite_.opaque == nullptr || sprite_.width <= 0) return;
-  const int left = spriteBaseX_ - sprite_.width / 2;
-  const int top = spriteBaseY_ - sprite_.height + 6;  // art-pack sprites keep a few blank rows at the bottom
-  const int sy = y - top;
-  if (sy < 0 || sy >= sprite_.height) return;
-  const int rowBytes = (sprite_.width + 7) / 8;
+  if (drawW_ <= 0 || drawH_ <= 0 || sprite_.width <= 0) return;
+  const int w = sprite_.width, h = sprite_.height;
+  // Bottom-centre of the opaque box sits on the bed, a little sunk into it.
+  const int centreX = (opaqueLeft_ + opaqueRight_ + 1) * drawW_ / (2 * w);
+  const int left = spriteBaseX_ - centreX;
+  const int top = spriteBaseY_ - (opaqueBottom_ + 1) * drawH_ / h + std::max(2, drawH_ / 40);
+  const int dy = y - top;
+  if (dy < 0 || dy >= drawH_) return;
+  // 8.8 fixed-point source position of this row.
+  const int syF = dy * h * 256 / drawH_;
+  const int sy = std::min(h - 1, syF >> 8);
+  const int fromX = std::max(left, x0), toX = std::min(left + drawW_, x1);
+  if (sprite_.gray4 != nullptr) {
+    const int rowBytes = (w + 1) / 2;
+    const auto at = [&](int sx, int yy) -> int {
+      const uint8_t byte = sprite_.gray4[yy * rowBytes + sx / 2];
+      return (sx & 1) ? (byte & 0x0F) : (byte >> 4);
+    };
+    const int sy2 = std::min(h - 1, sy + 1);
+    const int fy = syF & 0xFF;
+    for (int x = fromX; x < toX; ++x) {
+      const int sxF = (x - left) * w * 256 / drawW_;
+      const int sx = std::min(w - 1, sxF >> 8);
+      if (at(sx, sy) == SLEEP_ROOM_GRAY4_TRANSPARENT) continue;
+      // Bilinear blend of the opaque neighbours keeps the artwork smooth when
+      // it is scaled.
+      const int sx2 = std::min(w - 1, sx + 1);
+      const int fx = sxF & 0xFF;
+      const int v[4] = {at(sx, sy), at(sx2, sy), at(sx, sy2), at(sx2, sy2)};
+      const int wt[4] = {(256 - fx) * (256 - fy), fx * (256 - fy), (256 - fx) * fy, fx * fy};
+      int sum = 0, weight = 0;
+      for (int i = 0; i < 4; ++i) {
+        if (v[i] == SLEEP_ROOM_GRAY4_TRANSPARENT) continue;
+        sum += v[i] * wt[i];
+        weight += wt[i];
+      }
+      out[x] = static_cast<uint8_t>(weight > 0 ? sum * 255 / (weight * 14) : 0);
+    }
+    return;
+  }
+  const int rowBytes = (w + 7) / 8;
   const uint8_t* ink = sprite_.ink + sy * rowBytes;
   const uint8_t* opaque = sprite_.opaque + sy * rowBytes;
-  for (int sx = 0; sx < sprite_.width; ++sx) {
-    const int x = left + sx;
-    if (x < x0 || x >= x1) continue;
+  for (int x = fromX; x < toX; ++x) {
+    const int sx = std::min(w - 1, (x - left) * w / drawW_);
     const uint8_t mask = static_cast<uint8_t>(0x80 >> (sx & 7));
     if ((opaque[sx / 8] & mask) == 0) continue;
     out[x] = (ink[sx / 8] & mask) ? 24 : 238;
   }
 }
 
+uint8_t SleepRoomRenderer::shadeFrame(const int x, const int y, uint8_t room) const {
+  // Full-screen layout: a soft vignette towards the edges, then the label
+  // panel (white, rounded, outlined, with a drop shadow).
+  int lum = room;
+  const int edge = std::min({x, width_ - 1 - x, y, sceneH_ - 1 - y});
+  if (edge < 70) lum = darken(lum, (70 - edge) * 90 / 70);
+  constexpr int R = 14, SHADOW = 5;
+  const int px0 = 14, px1 = width_ - 15;
+  const auto inside = [&](int xx, int yy, int grow) {
+    const int l = px0 - grow, r = px1 + grow, t = panelTop_ - grow, b = panelBottom_ + grow;
+    if (xx < l || xx > r || yy < t || yy > b) return false;
+    const int cx = xx < l + R ? l + R : (xx > r - R ? r - R : xx);
+    const int cy = yy < t + R ? t + R : (yy > b - R ? b - R : yy);
+    return (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy) <= R * R;
+  };
+  if (panelBottom_ > panelTop_) {
+    if (inside(x - SHADOW / 2, y - SHADOW, 0) && !inside(x, y, 0)) lum = darken(lum, 110);
+    if (inside(x, y, 0)) lum = inside(x, y, -2) ? 250 : 0;
+  }
+  return static_cast<uint8_t>(clampi(lum, 0, 255));
+}
+
 void SleepRoomRenderer::renderRow(const int y, uint8_t* out) const {
   if (out == nullptr || width_ <= 0) return;
-  if (y < 0 || y >= SCENE_H) {
+  if (y < 0 || y >= sceneH_) {
     std::memset(out, 255, static_cast<size_t>(width_));
     return;
   }
-  // Window span on this row.
-  const int dy2 = 2 * y + 1 - 2 * BALL_CY;
+  // Visible span of the room on this row: the ball's window, or the whole row.
   int wx0 = 0, wx1 = 0;
-  if (dy2 * dy2 < 4 * WIN_R * WIN_R) {
-    const int half2 = static_cast<int>(isqrt32(static_cast<uint32_t>(4 * WIN_R * WIN_R - dy2 * dy2)));  // half px
-    wx0 = std::max(0, (2 * ballCx_ - half2) / 2);
-    wx1 = std::min(width_, (2 * ballCx_ + half2 + 1) / 2);
+  if (fullScreen_) {
+    wx1 = width_;
+  } else {
+    const int dy2 = 2 * y + 1 - 2 * BALL_CY;
+    if (dy2 * dy2 < 4 * WIN_R * WIN_R) {
+      const int half2 = static_cast<int>(isqrt32(static_cast<uint32_t>(4 * WIN_R * WIN_R - dy2 * dy2)));  // half px
+      wx0 = std::max(0, (2 * ballCx_ - half2) / 2);
+      wx1 = std::min(width_, (2 * ballCx_ + half2 + 1) / 2);
+    }
   }
   // Floor or ceiling depth for this row (back wall when nearer).
-  const int hy = 2 * VY - (2 * y + 1);
+  const int hy = 2 * vy_ - (2 * y + 1);
   int rowT = ZB_MM, rowSurface = 0;
-  if (hy < 0 && H_MM * 2 * F_PX / (-hy) < rowT) {
-    rowT = H_MM * 2 * F_PX / (-hy);
+  if (hy < 0 && H_MM * 2 * f_ / (-hy) < rowT) {
+    rowT = H_MM * 2 * f_ / (-hy);
     rowSurface = 1;
-  } else if (hy > 0 && (CH_MM - H_MM) * 2 * F_PX / hy < rowT) {
-    rowT = (CH_MM - H_MM) * 2 * F_PX / hy;
+  } else if (hy > 0 && (CH_MM - H_MM) * 2 * f_ / hy < rowT) {
+    rowT = (CH_MM - H_MM) * 2 * f_ / hy;
     rowSurface = 2;
   }
   for (int x = 0; x < width_; ++x) out[x] = (x >= wx0 && x < wx1) ? shadeRoom(x, y, rowT, rowSurface) : 255;
@@ -2802,7 +2938,11 @@ void SleepRoomRenderer::renderRow(const int y, uint8_t* out) const {
     drawSpriteRow(y, out, wx0, wx1);
     drawPrimsRow(y, out, wx0, wx1, spriteKey_, -32768, index);
   }
-  for (int x = 0; x < width_; ++x) out[x] = shadeShell(x, y, out[x]);
+  if (fullScreen_) {
+    for (int x = 0; x < width_; ++x) out[x] = shadeFrame(x, y, out[x]);
+  } else {
+    for (int x = 0; x < width_; ++x) out[x] = shadeShell(x, y, out[x]);
+  }
 }
 
 }  // namespace pokemon

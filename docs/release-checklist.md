@@ -65,15 +65,17 @@ artwork archive (`xteink-pokemon-sd-card-assets.zip`) contains only the
 - [ ] The source revisions match `docs/third-party-assets.md`.
 - [ ] `scripts/generate_pokemon_icon_art.py` completed locally.
 - [ ] `scripts/generate_pokemon_pokedex_art.py` completed locally.
-- [ ] The canonical local artwork directory contains all 850 required one-bit
-      BMPs with the documented dimensions (614 species/item/Pokédex art + 151
-      back sprites + 77 bag item icons + 8 badge icons).
+- [ ] `scripts/generate_pokemon_sleep_art.py` completed locally.
+- [ ] The canonical local artwork directory contains every required BMP with
+      the documented dimensions: the one-bit art (614 species/item/Pokédex art
+      + 151 back sprites + 77 bag item icons + 8 badge icons + 13 trainer
+      portraits) and the 151 four-bit sleep portraits.
 - [ ] The native artwork-generator/packager tests pass (`ctest -R
       PokemonArtPack`), confirming the pack against `RIGHTS_AND_ATTRIBUTION.md`
       and the manifest/checksum rules `scripts/package_pokemon_v2_release.py`
       itself enforces.
 - [ ] `xteink-pokemon-sd-card-assets.zip` contains only the `pokemon/` folder
-      (sprites, heroes, items, badges, trainers, pokedex, `manifest.json`) -
+      (sprites, heroes, items, badges, trainers, pokedex, sleep, `manifest.json`) -
       no firmware, no save files, no books, no settings, no cache files.
 - [ ] Extracting `pokemon/` onto an SD card with an existing Pokémon save
       leaves that save's hash unchanged.
