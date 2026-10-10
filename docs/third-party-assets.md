@@ -26,6 +26,17 @@ disclaims responsibility for clearing third-party rights. The CC0 declaration
 therefore must not be represented as this project's permission to redistribute
 the Pokémon images.
 
+## Sleep-screen portraits
+
+The local pack uses the original-151 official artwork files from
+[PokeAPI Sprites](https://github.com/PokeAPI/sprites), the same revision
+`4bc9d60186fe2e499ee2f3d4d1b796806cb99a67`, under
+`sprites/pokemon/other/official-artwork/`. They are converted to 240×240,
+4-bit grayscale portraits with a transparent background for the Pokémon sleep
+screens.
+
+The same CC0-with-Pokémon-IP-caveat disclaimer as "Species icons" applies.
+
 ## Player back sprites
 
 The local pack uses the original-151 `sprites/pokemon/back/` files from

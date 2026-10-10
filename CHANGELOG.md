@@ -1,3 +1,10 @@
+## [Unreleased]
+
+### Added
+
+- New **Pokémon (full screen)** sleep screen: the same room as the Pokémon sleep screen, filling the whole screen, with the Pokémon's details on a panel at the bottom.
+- Both Pokémon sleep screens now show the Pokémon's official artwork in shades of gray instead of its small battle sprite. The artwork comes from the new `sleep` folder of the SD-card art pack (`xteink-pokemon-sd-card-assets.zip`): update your SD card with the new pack to see it; with an older pack the battle sprite is shown as before.
+
 ## [1.13.0] - 2026-10-10
 
 ### Added
