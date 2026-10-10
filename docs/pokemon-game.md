@@ -151,6 +151,28 @@ Every wild encounter has a small (1-in-64) chance of being shiny, marked with a 
 its name everywhere it appears. Shiny Pokémon also tend to have noticeably better hidden
 stats than an ordinary catch of the same species.
 
+## Sleep screen
+
+Set **Settings > Display > Sleep Screen** to **Pokémon** and, every time the reader goes
+to sleep, one of your party members is shown asleep inside its Poké Ball, picked at random.
+The ball opens onto a small room drawn in perspective, with light from the window, shadows
+under the furniture and the four shades of gray the screen can show.
+
+- **Its types furnish the room.** The first type sets the back wall and the view out of the
+  window (bricks and a volcano for Fire, waves and the sea for Water, wood panels and a
+  garden for Grass, and so on for all fifteen types). A Pokémon with two types gets a room
+  that mixes both: the side walls and half of the furniture come from its second type.
+- **Its level decides how fine the room is.** There are seven rooms: Nest (Lv 1–10), Den
+  (11–20), Room (21–35), Apartment (36–50), Suite (51–65), Villa (66–85) and Palace
+  (86–100). Each one adds furniture: a window, shelves, a bookcase, a real bed, a marble
+  floor, a chandelier, a badge case that fills up with the Gym badges you have won, and
+  finally columns and the Champion's crown.
+
+Under the ball the screen shows the Pokémon's name, its types, its level, the room it has
+reached and the level that unlocks the next one. The Pokémon's sprite comes from the art
+pack on the SD card; without it, the room is shown empty. Before you pick a starter, the
+regular sleep screen is shown instead.
+
 ## Language support
 
 The Pokémon game's menus, messages, and prompts are available in every language this

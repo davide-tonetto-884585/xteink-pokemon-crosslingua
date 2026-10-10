@@ -1,3 +1,9 @@
+## [1.13.0] - 2026-10-10
+
+### Added
+
+- New **Pokémon** sleep screen (Settings > Display > Sleep Screen): a random member of your party is shown asleep inside its Poké Ball, in a room drawn in perspective with light, shadows and four shades of gray. The room's walls, view and furniture follow the Pokémon's types, and a Pokémon with two types gets a room that mixes both. Its level picks one of seven rooms, from a straw Nest at Lv 1 to a Palace with a chandelier, columns and the Champion's crown at Lv 86 and above; the badge case shows the Gym badges you have won. Under the ball: name, types, level, current room and the level that unlocks the next one.
+
 ## [1.12.0] - 2026-10-09
 
 ### Changed
