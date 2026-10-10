@@ -39,6 +39,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     DASHBOARD_SLEEP = 11,
     // Pokemon builds only: a random party member asleep in its Poke Ball.
     POKEMON_SLEEP = 12,
+    // Pokemon builds only: the same room filling the whole screen.
+    POKEMON_FULL_SLEEP = 13,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };

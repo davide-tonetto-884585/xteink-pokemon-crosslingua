@@ -26,6 +26,7 @@ namespace {
 
 constexpr int MAX_SPRITE_W = 160;
 constexpr int MAX_SPRITE_H = 120;
+constexpr int MAX_PORTRAIT = 320;
 
 const char* typeLabel(const PokemonType type) {
   switch (type) {
@@ -132,6 +133,42 @@ bool loadSprite(const uint16_t speciesId, int& width, int& height, std::unique_p
   return true;
 }
 
+// Loads the art pack's grayscale sleep portrait (sleep/NNN.bmp: a 4-bit
+// indexed BMP, palette 0..14 grays, 15 transparent; see
+// scripts/generate_pokemon_sleep_art.py). Returns false when the art pack
+// predates these portraits; the caller then falls back to the hero sprite.
+bool loadPortrait(const uint16_t speciesId, int& width, int& height, std::unique_ptr<uint8_t[]>& gray4) {
+  char path[64]{};
+  if (pokemonSleepArtPath(speciesId, path, sizeof(path)) == nullptr) return false;
+  FsFile file;
+  if (!Storage.openFileForRead("PKSLP", path, file)) return false;
+  uint8_t header[54];
+  const auto le32 = [&header](int o) {
+    return static_cast<int32_t>(header[o] | header[o + 1] << 8 | header[o + 2] << 16 |
+                                static_cast<uint32_t>(header[o + 3]) << 24);
+  };
+  bool ok = file.read(header, sizeof(header)) == static_cast<int>(sizeof(header)) && header[0] == 'B' &&
+            header[1] == 'M' && (header[28] | header[29] << 8) == 4 && le32(30) == 0;
+  const int32_t offset = ok ? le32(10) : 0;
+  width = ok ? le32(18) : 0;
+  const int32_t rawHeight = ok ? le32(22) : 0;
+  height = rawHeight < 0 ? -rawHeight : rawHeight;
+  ok = ok && width > 0 && height > 0 && width <= MAX_PORTRAIT && height <= MAX_PORTRAIT;
+  const int rowBytes = (width + 1) / 2;
+  const int stride = ((width * 4 + 31) / 32) * 4;
+  if (ok) gray4.reset(new (std::nothrow) uint8_t[static_cast<size_t>(rowBytes) * height]);
+  std::unique_ptr<uint8_t[]> row(ok ? new (std::nothrow) uint8_t[stride] : nullptr);
+  ok = ok && gray4 && row && file.seek(static_cast<uint32_t>(offset));
+  for (int i = 0; ok && i < height; ++i) {
+    ok = file.read(row.get(), stride) == stride;
+    const int y = rawHeight < 0 ? i : height - 1 - i;
+    if (ok) std::memcpy(gray4.get() + static_cast<size_t>(y) * rowBytes, row.get(), rowBytes);
+  }
+  file.close();
+  if (!ok) gray4.reset();
+  return ok;
+}
+
 // A boxed type label centred on cx; returns its width.
 int typeChipWidth(const GfxRenderer& r, const char* label) {
   return r.getTextWidth(SMALL_FONT_ID, label, EpdFontFamily::BOLD) + 16;
@@ -146,25 +183,41 @@ void drawTypeChip(const GfxRenderer& r, const int x, const int y, const char* la
 // Labels go into the frame buffer; writePokemonSleepImage() then burns every
 // black frame-buffer pixel into the image as pure black.
 void drawLabels(const GfxRenderer& r, const PokemonRecord& record, const SpeciesData& species, const uint8_t level,
-                const uint8_t tier, const SleepRoomRenderer& room) {
+                const uint8_t tier, const SleepRoomRenderer& room, const bool fullScreen) {
   const int screenW = r.getScreenWidth();
-  // Level inside the ball's button.
   char levelText[8];
   std::snprintf(levelText, sizeof(levelText), "%u", static_cast<unsigned>(level));
-  const int bx = room.buttonCenterX(), by = room.buttonCenterY();
-  const int lvH = r.getLineHeight(SMALL_FONT_ID);
-  const int numH = r.getLineHeight(UI_10_FONT_ID);
-  const int stackTop = by - (lvH + numH - 6) / 2;
-  r.drawText(SMALL_FONT_ID, bx - r.getTextWidth(SMALL_FONT_ID, "Lv") / 2, stackTop, "Lv");
-  r.drawText(UI_10_FONT_ID, bx - r.getTextWidth(UI_10_FONT_ID, levelText, EpdFontFamily::BOLD) / 2, stackTop + lvH - 6,
-             levelText, true, EpdFontFamily::BOLD);
-
-  int y = room.sceneHeight() + 10;
   // Name: nickname when set, else the species name.
   const char* name = record.nickname[0] != '\0' ? record.nickname.data() : species.name;
-  const std::string fitted = r.truncatedText(UI_12_FONT_ID, name, screenW - 40, EpdFontFamily::BOLD);
-  r.drawCenteredText(UI_12_FONT_ID, y, fitted.c_str(), true, EpdFontFamily::BOLD);
-  y += r.getLineHeight(UI_12_FONT_ID) + 10;
+  int y;
+  if (fullScreen) {
+    // Everything on the panel along the bottom edge: "NAME  Lv. 58" first.
+    y = room.panelTop() + 14;
+    char levelLabel[16];
+    std::snprintf(levelLabel, sizeof(levelLabel), "Lv. %u", static_cast<unsigned>(level));
+    const int levelW = r.getTextWidth(UI_10_FONT_ID, levelLabel, EpdFontFamily::BOLD);
+    const std::string fitted = r.truncatedText(UI_12_FONT_ID, name, screenW - 80 - levelW, EpdFontFamily::BOLD);
+    const int nameW = r.getTextWidth(UI_12_FONT_ID, fitted.c_str(), EpdFontFamily::BOLD);
+    const int x = (screenW - nameW - 14 - levelW) / 2;
+    r.drawText(UI_12_FONT_ID, x, y, fitted.c_str(), true, EpdFontFamily::BOLD);
+    r.drawText(UI_10_FONT_ID, x + nameW + 14,
+               y + r.getFontAscenderSize(UI_12_FONT_ID) - r.getFontAscenderSize(UI_10_FONT_ID), levelLabel, true,
+               EpdFontFamily::BOLD);
+    y += r.getLineHeight(UI_12_FONT_ID) + 6;
+  } else {
+    // Level inside the ball's button.
+    const int bx = room.buttonCenterX(), by = room.buttonCenterY();
+    const int lvH = r.getLineHeight(SMALL_FONT_ID);
+    const int numH = r.getLineHeight(UI_10_FONT_ID);
+    const int stackTop = by - (lvH + numH - 6) / 2;
+    r.drawText(SMALL_FONT_ID, bx - r.getTextWidth(SMALL_FONT_ID, "Lv") / 2, stackTop, "Lv");
+    r.drawText(UI_10_FONT_ID, bx - r.getTextWidth(UI_10_FONT_ID, levelText, EpdFontFamily::BOLD) / 2,
+               stackTop + lvH - 6, levelText, true, EpdFontFamily::BOLD);
+    y = room.sceneHeight() + 10;
+    const std::string fitted = r.truncatedText(UI_12_FONT_ID, name, screenW - 40, EpdFontFamily::BOLD);
+    r.drawCenteredText(UI_12_FONT_ID, y, fitted.c_str(), true, EpdFontFamily::BOLD);
+    y += r.getLineHeight(UI_12_FONT_ID) + 10;
+  }
 
   // Type chips.
   const char* primary = typeLabel(species.primaryType);
@@ -180,10 +233,10 @@ void drawLabels(const GfxRenderer& r, const PokemonRecord& record, const Species
     x += plusW + 8;
     drawTypeChip(r, x, y, secondary);
   }
-  y += r.getLineHeight(SMALL_FONT_ID) + 18;
+  y += r.getLineHeight(SMALL_FONT_ID) + (fullScreen ? 12 : 18);
 
   r.drawCenteredText(UI_10_FONT_ID, y, tr(STR_POKEMON_SLEEP_RESTING));
-  y += r.getLineHeight(UI_10_FONT_ID) + 16;
+  y += r.getLineHeight(UI_10_FONT_ID) + (fullScreen ? 10 : 16);
 
   // Room tier: name, one box per tier, next unlock.
   const char* tierName = tierLabel(tier);
@@ -250,7 +303,7 @@ bool writeHeader(FsFile& file, const int width, const int height, const int rowS
 
 }  // namespace
 
-bool writePokemonSleepImage(const GfxRenderer& renderer) {
+bool writePokemonSleepImage(const GfxRenderer& renderer, const bool fullScreen) {
   std::unique_ptr<PokemonSnapshot> snapshot(new (std::nothrow) PokemonSnapshot());
   if (!snapshot) return false;
   if (devicePokemonService().loadSnapshot(*snapshot) != ServiceStatus::Ok || snapshot->partyCount == 0) {
@@ -271,11 +324,32 @@ bool writePokemonSleepImage(const GfxRenderer& renderer) {
   spec.tier = sleepRoomTierForLevel(level);
   spec.badges = badges;
   spec.seed = record.recordId;
+  spec.layout = fullScreen ? SleepRoomLayout::FullScreen : SleepRoomLayout::PokeBall;
 
   const int width = renderer.getScreenWidth();
   const int height = renderer.getScreenHeight();
   std::unique_ptr<SleepRoomRenderer> room(new (std::nothrow) SleepRoomRenderer());
-  if (!room || !room->build(spec, width)) {
+  if (!room) return false;
+
+  // The Pokemon itself: the grayscale portrait when the art pack has it,
+  // otherwise the 1-bit hero sprite. Set before build(), which places the
+  // "z Z" by it.
+  int spriteW = 0, spriteH = 0;
+  std::unique_ptr<uint8_t[]> gray4, ink, opaque;
+  SleepRoomSprite sprite;
+  if (loadPortrait(record.speciesId, spriteW, spriteH, gray4)) {
+    sprite.gray4 = gray4.get();
+  } else if (loadSprite(record.speciesId, spriteW, spriteH, ink, opaque)) {
+    sprite.ink = ink.get();
+    sprite.opaque = opaque.get();
+  } else {
+    LOG_INF("PKSLP", "No art for species %u; drawing the room only", record.speciesId);
+  }
+  sprite.width = spriteW;
+  sprite.height = spriteH;
+  room->setSprite(sprite);
+
+  if (!room->build(spec, width, height)) {
     LOG_ERR("PKSLP", "Not enough memory for the sleep room");
     return false;
   }
@@ -283,16 +357,8 @@ bool writePokemonSleepImage(const GfxRenderer& renderer) {
     LOG_DBG("PKSLP", "Sleep room display list full; some furniture skipped");
   }
 
-  int spriteW = 0, spriteH = 0;
-  std::unique_ptr<uint8_t[]> ink, opaque;
-  if (loadSprite(record.speciesId, spriteW, spriteH, ink, opaque)) {
-    room->setSprite({spriteW, spriteH, ink.get(), opaque.get()});
-  } else {
-    LOG_INF("PKSLP", "No hero sprite for species %u; drawing the room only", record.speciesId);
-  }
-
   renderer.clearScreen();
-  drawLabels(renderer, record, *species, level, spec.tier, *room);
+  drawLabels(renderer, record, *species, level, spec.tier, *room, fullScreen);
 
   Storage.mkdir("/.crosspoint");
   FsFile file;

@@ -62,6 +62,14 @@ const char* pokemonPokedexArtPath(const uint16_t speciesId, const bool landscape
                                   landscape ? "landscape" : "portrait", static_cast<unsigned>(speciesId)));
 }
 
+const char* pokemonSleepArtPath(const uint16_t speciesId, char* output, const size_t outputSize) {
+  if (output == nullptr || outputSize == 0) return nullptr;
+  output[0] = '\0';
+  if (speciesId == 0 || speciesId > KANTO_SPECIES_COUNT) return nullptr;
+  return finishPath(output, outputSize,
+                    std::snprintf(output, outputSize, "/pokemon/sleep/%03u.bmp", static_cast<unsigned>(speciesId)));
+}
+
 const char* pokemonItemArtPath(const EvolutionItem item, const bool hero, char* output, const size_t outputSize) {
   if (output == nullptr || outputSize == 0) return nullptr;
   output[0] = '\0';

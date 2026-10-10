@@ -12,11 +12,12 @@ using pokemon::SleepRoomSpec;
 namespace {
 
 constexpr int kWidth = 480;
+constexpr int kHeight = 800;
 
 std::vector<uint8_t> renderScene(const SleepRoomSpec& spec, const pokemon::SleepRoomSprite* sprite = nullptr) {
   SleepRoomRenderer room;
-  EXPECT_TRUE(room.build(spec, kWidth));
   if (sprite != nullptr) room.setSprite(*sprite);
+  EXPECT_TRUE(room.build(spec, kWidth, kHeight));
   std::vector<uint8_t> image(static_cast<size_t>(kWidth) * room.sceneHeight());
   for (int y = 0; y < room.sceneHeight(); ++y) room.renderRow(y, &image[static_cast<size_t>(y) * kWidth]);
   return image;
@@ -64,7 +65,7 @@ TEST(PokemonSleepRoom, EveryTypeAndTierFitsTheDisplayList) {
         spec.tier = tier;
         spec.badges = 8;
         SleepRoomRenderer room;
-        ASSERT_TRUE(room.build(spec, kWidth));
+        ASSERT_TRUE(room.build(spec, kWidth, kHeight));
         EXPECT_FALSE(room.overflowed()) << "type " << static_cast<int>(primary) << "/" << static_cast<int>(secondary)
                                         << " tier " << static_cast<int>(tier);
         EXPECT_GT(room.primitiveCount(), 0u);
@@ -90,7 +91,7 @@ TEST(PokemonSleepRoom, HigherTiersAddFurniture) {
     spec.primary = PokemonType::Electric;
     spec.tier = tier;
     SleepRoomRenderer room;
-    ASSERT_TRUE(room.build(spec, kWidth));
+    ASSERT_TRUE(room.build(spec, kWidth, kHeight));
     if (tier > 2) {
       EXPECT_GT(room.primitiveCount(), previous) << "tier " << static_cast<int>(tier);
     }
@@ -158,7 +159,7 @@ TEST(PokemonSleepRoom, SpriteIsDrawnOnTheBed) {
   spec.primary = PokemonType::Normal;
   spec.tier = 2;
   SleepRoomRenderer probe;
-  ASSERT_TRUE(probe.build(spec, kWidth));
+  ASSERT_TRUE(probe.build(spec, kWidth, kHeight));
   constexpr int w = 8, h = 8;
   std::vector<uint8_t> ink(h, 0xFF), opaque(h, 0xFF);
   const pokemon::SleepRoomSprite sprite{w, h, ink.data(), opaque.data()};
@@ -168,4 +169,50 @@ TEST(PokemonSleepRoom, SpriteIsDrawnOnTheBed) {
   const int x = probe.spriteBaseX();
   const int y = probe.spriteBaseY() - 2;
   EXPECT_LT(withSprite[static_cast<size_t>(y) * kWidth + x], 60);
+}
+
+TEST(PokemonSleepRoom, FullScreenLayoutFillsTheScreenWithAPanel) {
+  SleepRoomSpec spec;
+  spec.primary = PokemonType::Fire;
+  spec.tier = 4;
+  spec.layout = pokemon::SleepRoomLayout::FullScreen;
+  SleepRoomRenderer room;
+  ASSERT_TRUE(room.build(spec, kWidth, kHeight));
+  EXPECT_EQ(room.sceneHeight(), kHeight);
+  ASSERT_LT(room.panelTop(), room.panelBottom());
+  EXPECT_LE(room.panelBottom(), kHeight);
+  std::vector<uint8_t> row(kWidth);
+  // The room reaches the corners (no white margin, unlike the ball layout).
+  room.renderRow(5, row.data());
+  EXPECT_LT(row[5], 250);
+  // The panel's interior is white.
+  room.renderRow((room.panelTop() + room.panelBottom()) / 2, row.data());
+  EXPECT_GE(row[kWidth / 2], 245);
+  EXPECT_FALSE(room.overflowed());
+}
+
+TEST(PokemonSleepRoom, GrayPortraitKeepsItsTransparentPixels) {
+  // 4x4 portrait: transparent border, a dark 2x2 centre (gray index 0).
+  constexpr int w = 4, h = 4, rb = 2;
+  std::vector<uint8_t> gray(rb * h, 0xFF);  // all transparent (15)
+  gray[1 * rb + 0] = 0xF0;                  // (1,1) = 0, (0,1) = 15
+  gray[1 * rb + 1] = 0x0F;                  // (2,1) = 0
+  gray[2 * rb + 0] = 0xF0;
+  gray[2 * rb + 1] = 0x0F;
+  pokemon::SleepRoomSprite sprite;
+  sprite.width = w;
+  sprite.height = h;
+  sprite.gray4 = gray.data();
+  SleepRoomSpec spec;
+  spec.primary = PokemonType::Normal;
+  spec.tier = 2;
+  const auto plain = renderScene(spec);
+  const auto withSprite = renderScene(spec, &sprite);
+  EXPECT_NE(plain, withSprite);
+  // Far from the bed nothing changes: transparent pixels never paint.
+  for (int y = 0; y < 200; ++y) {
+    for (int x = 0; x < kWidth; ++x) {
+      ASSERT_EQ(plain[static_cast<size_t>(y) * kWidth + x], withSprite[static_cast<size_t>(y) * kWidth + x]);
+    }
+  }
 }
