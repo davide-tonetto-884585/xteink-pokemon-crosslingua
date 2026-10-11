@@ -1,3 +1,10 @@
+## [Unreleased]
+
+### Changed
+
+- **Bookshelf** Home: the Pokémon on the shelves are now drawn from their official artwork in shades of gray, the same portraits as the Pokémon sleep screens (from the `sleep` folder of the SD-card art pack; with an older pack they are cut out of the Pokédex card as before).
+- **Bookshelf** Home loads faster: coming back to Home no longer opens the face-on unread book again or rereads the reading stats of every recent book, and the Pokémon on the shelves are prepared once instead of being recomputed pixel by pixel at every redraw, so moving the selection with the buttons is quicker too.
+
 ## [1.13.1] - 2026-10-11
 
 ### Added
