@@ -313,7 +313,25 @@ bool writePokemonSleepImage(const GfxRenderer& renderer, const bool fullScreen) 
   sprite.height = spriteH;
   room->setSprite(sprite);
 
-  if (!room->build(spec, width, height)) {
+  bool built = room->build(spec, width, height);
+  if (!built && gray4) {
+    // The portrait (~29 KB) can leave too little memory for the room on the
+    // X3/X4 (no PSRAM), e.g. after a long reading session: free it and use the
+    // much smaller hero sprite instead, as before the portraits.
+    LOG_INF("PKSLP", "Not enough memory with the portrait; using the battle sprite");
+    gray4.reset();
+    sprite = SleepRoomSprite{};
+    spriteW = spriteH = 0;
+    if (loadSprite(record.speciesId, spriteW, spriteH, ink, opaque)) {
+      sprite.ink = ink.get();
+      sprite.opaque = opaque.get();
+      sprite.width = spriteW;
+      sprite.height = spriteH;
+    }
+    room->setSprite(sprite);
+    built = room->build(spec, width, height);
+  }
+  if (!built) {
     LOG_ERR("PKSLP", "Not enough memory for the sleep room");
     return false;
   }
