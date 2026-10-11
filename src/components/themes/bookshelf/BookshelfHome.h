@@ -59,12 +59,18 @@ class BookshelfHome {
   // the cover thumbnail of the first one that opens).
   std::vector<std::string> unreadFrontCandidates() const;
   // Turns that book face-on with its cover, and gives it its real title/author.
+  // Remembered for the session, like the unread pick itself.
   void setUnreadFront(const std::string& path, const std::string& thumbPath, const std::string& title,
                       const std::string& author);
+  // True once the face-on unread book has been looked for this session (found
+  // or not), so coming back to Home does not open those EPUBs again.
+  bool unreadFrontResolved() const;
+  void markUnreadFrontResolved();
 
   // Pokemon standing on the shelves: `shelf` 0 is the top one (the party's
-  // first Pokemon), 1 the bottom one (the second). Loads and crops the picture
-  // once (see BookshelfHome.cpp); speciesId 0 clears it.
+  // first Pokemon), 1 the bottom one (the second). Loads, crops, scales and
+  // outlines the picture once (see BookshelfHome.cpp), so drawing it is only a
+  // copy; speciesId 0 clears it.
   void setBookend(size_t shelf, uint16_t speciesId);
 
   // Draws everything below the status bar and above `bottom`.
@@ -93,13 +99,15 @@ class BookshelfHome {
   // CrossInk's reading stats for the book (as on its Dashboard home), as
   // right-aligned value/label pairs spread between `top` and `bottom`.
   void drawStats(const GfxRenderer& renderer, int x, int top, int width, int bottom, const CurrentBook& current) const;
-  // The Pokemon picture standing on a shelf, cut to its own shape plus a
-  // margin for its halo, 1 bit per pixel. Its width sizes its shelf slot.
+  // The Pokemon picture standing on a shelf, ready to draw: cut to its own
+  // shape plus a margin for its halo, 4 bits per pixel (BOOKEND_* values in
+  // BookshelfHome.cpp: grays, then the white halo, then transparent). Its
+  // width sizes its shelf slot.
   struct Bookend {
     int width = 0;
     int height = 0;
-    std::vector<uint8_t> bits;
-    bool at(int x, int y) const;
+    std::vector<uint8_t> pixels;
+    uint8_t at(int x, int y) const;
   };
 
   void drawShelf(const GfxRenderer& renderer, Rect area, const std::vector<Book>& books, const Bookend& bookend,

@@ -30,14 +30,19 @@ screen keeps the Minimal look.
   cover is prepared the first time and then kept).
 - **Pokémon on the shelves** (Pokémon firmware): the first Pokémon in your
   party sits at the end of the top shelf, the second at the start of the
-  bottom one, each cut out of its Pokédex card at its original size.
+  bottom one, drawn from its official artwork in shades of gray (the
+  `pokemon/sleep` portraits of the SD-card art pack, also used by the Pokémon
+  sleep screens) with a white outline that lifts it off the wallpaper. With an
+  older art pack without those portraits it is cut out of its Pokédex card.
 
 Books stand spine-out with the title (and the author, when the spine is wide
 enough) written along the spine, each with its own width, height and binding
 - black, gray with a label, or light with gilt bands - and the page edges
 showing at the top; face-on books show their page block along the side.
 The pick of unread books stays the same until the reader restarts, then a new
-one is drawn.
+one is drawn. What Home learns while loading the shelves (which unread book
+stands face-on, which recent books are finished) is also kept until then, so
+coming back to Home only reloads what changed.
 
 ## Using it
 
