@@ -51,21 +51,26 @@ class BookshelfHome {
   // `frontThumbs` maps recent-book paths that already have a face-on thumbnail.
   void loadReadShelf(const std::string& currentPath, const std::vector<std::pair<std::string, std::string>>& frontThumbs);
   // A random pick of books on the SD card that were never opened. The scan is
-  // bounded (depth, entries) and its result kept for the session, so coming
-  // back to Home does not rescan or reshuffle.
+  // bounded (depth, entries) and keeps a pool of books in the shelf cache on
+  // the card, rescanned every few boots; each boot draws a new handful from
+  // it, kept until the next boot.
   void loadUnreadShelf(const std::string& currentPath);
   bool unreadLoaded() const { return unreadLoaded_; }
   // Unread EPUBs that could stand face-on, best first (HomeActivity generates
   // the cover thumbnail of the first one that opens).
   std::vector<std::string> unreadFrontCandidates() const;
   // Turns that book face-on with its cover, and gives it its real title/author.
-  // Remembered for the session, like the unread pick itself.
+  // Remembered in the shelf cache until the next card scan.
   void setUnreadFront(const std::string& path, const std::string& thumbPath, const std::string& title,
                       const std::string& author);
-  // True once the face-on unread book has been looked for this session (found
-  // or not), so coming back to Home does not open those EPUBs again.
+  // True once the face-on unread book has been looked for (found or not), so
+  // coming back to Home does not open those EPUBs again.
   bool unreadFrontResolved() const;
   void markUnreadFrontResolved();
+  // Writes what the shelves learnt (unread pool, face-on book, read-book
+  // states) to the shelf cache on the card, if anything changed. Waking from
+  // sleep restarts the reader, so this is what makes later Homes fast.
+  static void saveCache();
 
   // Pokemon standing on the shelves: `shelf` 0 is the top one (the party's
   // first Pokemon), 1 the bottom one (the second). Loads, crops, scales and

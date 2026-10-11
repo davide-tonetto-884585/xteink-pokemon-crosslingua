@@ -2544,7 +2544,7 @@ void HomeActivity::loadBookshelf() {
   bookshelf_.loadUnreadShelf(currentPath);
   // One unread book stands face-on. Its cover thumbnail is generated once (it
   // then stays in the book's cache), which also gives it its real title. The
-  // pick is kept for the session, so later visits open no EPUB here.
+  // pick is kept in the shelf cache on the card, so later Homes open no EPUB here.
   if (!bookshelf_.unreadFrontResolved()) {
     for (const std::string& path : bookshelf_.unreadFrontCandidates()) {
       const std::string thumb = bookshelfThumbPath(path, false);
@@ -2561,6 +2561,7 @@ void HomeActivity::loadBookshelf() {
     }
     bookshelf_.markUnreadFrontResolved();
   }
+  BookshelfHome::saveCache();
 #if defined(CROSSINK_ENABLE_POKEMON)
   // The party's first Pokemon stands on the top shelf, the second on the bottom one.
   pokemon::PokemonSnapshot party;

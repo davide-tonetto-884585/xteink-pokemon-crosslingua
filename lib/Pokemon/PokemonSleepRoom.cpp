@@ -2466,11 +2466,13 @@ bool SleepRoomRenderer::build(const SleepRoomSpec& spec, const int screenWidth, 
     sceneH_ = BALL_SCENE_H;
     panelTop_ = panelBottom_ = 0;
   }
-  // On-screen size of the sleeping Pokemon: portraits are drawn large, 1-bit
-  // sprites at a whole multiple of their size so their pixels stay crisp.
+  // On-screen size of the sleeping Pokemon: portraits are sized to the room
+  // (their square is about 40% of its height at the bed, so the Pokemon
+  // stands well inside the walls), 1-bit sprites at a whole multiple of their
+  // size so their pixels stay crisp.
   if (sprite_.width > 0) {
     if (sprite_.gray4 != nullptr) {
-      const int target = fullScreen_ ? screenWidth * 5 / 8 : 170;
+      const int target = f_ * 2 / 5;
       drawH_ = target;
       drawW_ = sprite_.width * target / sprite_.height;
     } else {
