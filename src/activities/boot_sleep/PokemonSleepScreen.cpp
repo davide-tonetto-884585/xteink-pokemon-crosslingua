@@ -18,6 +18,7 @@
 #include <string>
 
 #include "components/pokemon/PokemonArtPath.h"
+#include "components/pokemon/PokemonPortrait.h"
 #include "fontIds.h"
 #include "pokemon/PokemonService.h"
 
@@ -26,7 +27,6 @@ namespace {
 
 constexpr int MAX_SPRITE_W = 160;
 constexpr int MAX_SPRITE_H = 120;
-constexpr int MAX_PORTRAIT = 320;
 
 const char* typeLabel(const PokemonType type) {
   switch (type) {
@@ -131,42 +131,6 @@ bool loadSprite(const uint16_t speciesId, int& width, int& height, std::unique_p
   file.close();
   sleepRoomSpriteMask(ink.get(), width, height, opaque.get());
   return true;
-}
-
-// Loads the art pack's grayscale sleep portrait (sleep/NNN.bmp: a 4-bit
-// indexed BMP, palette 0..14 grays, 15 transparent; see
-// scripts/generate_pokemon_sleep_art.py). Returns false when the art pack
-// predates these portraits; the caller then falls back to the hero sprite.
-bool loadPortrait(const uint16_t speciesId, int& width, int& height, std::unique_ptr<uint8_t[]>& gray4) {
-  char path[64]{};
-  if (pokemonSleepArtPath(speciesId, path, sizeof(path)) == nullptr) return false;
-  FsFile file;
-  if (!Storage.openFileForRead("PKSLP", path, file)) return false;
-  uint8_t header[54];
-  const auto le32 = [&header](int o) {
-    return static_cast<int32_t>(header[o] | header[o + 1] << 8 | header[o + 2] << 16 |
-                                static_cast<uint32_t>(header[o + 3]) << 24);
-  };
-  bool ok = file.read(header, sizeof(header)) == static_cast<int>(sizeof(header)) && header[0] == 'B' &&
-            header[1] == 'M' && (header[28] | header[29] << 8) == 4 && le32(30) == 0;
-  const int32_t offset = ok ? le32(10) : 0;
-  width = ok ? le32(18) : 0;
-  const int32_t rawHeight = ok ? le32(22) : 0;
-  height = rawHeight < 0 ? -rawHeight : rawHeight;
-  ok = ok && width > 0 && height > 0 && width <= MAX_PORTRAIT && height <= MAX_PORTRAIT;
-  const int rowBytes = (width + 1) / 2;
-  const int stride = ((width * 4 + 31) / 32) * 4;
-  if (ok) gray4.reset(new (std::nothrow) uint8_t[static_cast<size_t>(rowBytes) * height]);
-  std::unique_ptr<uint8_t[]> row(ok ? new (std::nothrow) uint8_t[stride] : nullptr);
-  ok = ok && gray4 && row && file.seek(static_cast<uint32_t>(offset));
-  for (int i = 0; ok && i < height; ++i) {
-    ok = file.read(row.get(), stride) == stride;
-    const int y = rawHeight < 0 ? i : height - 1 - i;
-    if (ok) std::memcpy(gray4.get() + static_cast<size_t>(y) * rowBytes, row.get(), rowBytes);
-  }
-  file.close();
-  if (!ok) gray4.reset();
-  return ok;
 }
 
 // A boxed type label centred on cx; returns its width.
@@ -337,7 +301,7 @@ bool writePokemonSleepImage(const GfxRenderer& renderer, const bool fullScreen) 
   int spriteW = 0, spriteH = 0;
   std::unique_ptr<uint8_t[]> gray4, ink, opaque;
   SleepRoomSprite sprite;
-  if (loadPortrait(record.speciesId, spriteW, spriteH, gray4)) {
+  if (loadPokemonPortrait(record.speciesId, spriteW, spriteH, gray4)) {
     sprite.gray4 = gray4.get();
   } else if (loadSprite(record.speciesId, spriteW, spriteH, ink, opaque)) {
     sprite.ink = ink.get();

@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <strings.h>
 
 #include "BookshelfWallpaper.h"
@@ -22,6 +24,7 @@
 
 #if defined(CROSSINK_ENABLE_POKEMON)
 #include "components/pokemon/PokemonArtPath.h"
+#include "components/pokemon/PokemonPortrait.h"
 #endif
 
 #if defined(ARDUINO_ARCH_ESP32) && !defined(SIMULATOR)
@@ -34,9 +37,16 @@ constexpr const char* CACHE_ROOT = "/.crosspoint";
 constexpr int MARGIN = 16;
 constexpr int PLANK_HEIGHT = 8;
 constexpr int SHELF_TOP_GAP = 10;
-// Widest slot the bookend Pokemon gets; a wider one is scaled down to fit.
+// Widest slot the bookend Pokemon gets, and its tallest picture; a bigger
+// one is scaled down to fit.
 constexpr int BOOKEND_MAX_WIDTH = 150;
-constexpr int BOOKEND_PAD = 3;  // room for its halo
+constexpr int BOOKEND_MAX_HEIGHT = 160;
+constexpr int BOOKEND_PAD = 4;  // room for its halo
+// Bookend pixel values: grays 0 (black) .. BOOKEND_WHITE, then the halo and
+// transparent.
+constexpr uint8_t BOOKEND_WHITE = 13;
+constexpr uint8_t BOOKEND_HALO = 14;
+constexpr uint8_t BOOKEND_CLEAR = 15;
 constexpr size_t MAX_READ_BOOKS = 30;
 constexpr size_t UNREAD_PICKS = 30;
 constexpr int SCAN_MAX_DEPTH = 3;
@@ -140,6 +150,48 @@ bool& sessionUnreadScanned() {
   return scanned;
 }
 
+// The face-on unread book found this session (path empty: none was found).
+struct UnreadFront {
+  bool resolved = false;
+  std::string path;
+  std::string thumbPath;
+  std::string title;
+  std::string author;
+};
+
+UnreadFront& sessionUnreadFront() {
+  static UnreadFront front;
+  return front;
+}
+
+// What loadReadShelf() learnt about each recent book (whether the file is
+// still there, whether it was finished), kept while the recent-books list is
+// unchanged. A book can only be finished by opening it, which moves it to the
+// front of that list, so an unchanged list means these are still right.
+struct ReadShelfStatus {
+  uint32_t key = 0;
+  bool exists = false;
+  bool completed = false;
+};
+
+struct ReadShelfCache {
+  uint32_t signature = 0;
+  std::vector<ReadShelfStatus> books;
+};
+
+ReadShelfCache& sessionReadShelf() {
+  static ReadShelfCache cache;
+  return cache;
+}
+
+uint32_t recentBooksSignature() {
+  uint32_t hash = 2166136261U;
+  for (const RecentBook& recent : RECENT_BOOKS.getBooks()) {
+    hash = (hash ^ bookshelf::keyForPath(recent.path.c_str())) * 16777619U;
+  }
+  return hash;
+}
+
 void drawWrappedLines(const GfxRenderer& renderer, int fontId, int x, int& y, int width, const char* text, int maxLines,
                       EpdFontFamily::Style style) {
   const auto lines = renderer.wrappedText(fontId, text, width, maxLines, style);
@@ -186,18 +238,36 @@ void moveFrontBookInward(std::vector<BookshelfHome::Book>& books) {
 void BookshelfHome::loadReadShelf(const std::string& currentPath,
                                   const std::vector<std::pair<std::string, std::string>>& frontThumbs) {
   read_.clear();
+  ReadShelfCache& cache = sessionReadShelf();
+  const uint32_t signature = recentBooksSignature();
+  if (cache.signature != signature) {
+    cache.signature = signature;
+    cache.books.clear();
+  }
   for (const RecentBook& recent : RECENT_BOOKS.getBooks()) {
     if (read_.size() >= MAX_READ_BOOKS) break;
-    if (recent.path == currentPath || !isBookFile(recent.path) || !Storage.exists(recent.path.c_str())) continue;
+    if (recent.path == currentPath || !isBookFile(recent.path)) continue;
+    const uint32_t key = bookshelf::keyForPath(recent.path.c_str());
+    auto status = std::find_if(cache.books.begin(), cache.books.end(),
+                               [key](const ReadShelfStatus& known) { return known.key == key; });
+    if (status == cache.books.end()) {
+      ReadShelfStatus known;
+      known.key = key;
+      known.exists = Storage.exists(recent.path.c_str());
+      if (known.exists && FsHelpers::hasEpubExtension(recent.path)) {
+        known.completed = BookReadingStats::load(Epub::cachePathForFilePath(recent.path, CACHE_ROOT)).isCompleted;
+      }
+      cache.books.push_back(known);
+      status = cache.books.end() - 1;
+    }
+    if (!status->exists) continue;
     Book book;
     book.path = recent.path;
     book.title = recent.title.empty() ? bookshelf::titleFromFileName(recent.path.c_str()) : recent.title;
     book.author = recent.author;
-    book.key = bookshelf::keyForPath(recent.path.c_str());
+    book.key = key;
     book.started = true;
-    if (FsHelpers::hasEpubExtension(recent.path)) {
-      book.completed = BookReadingStats::load(Epub::cachePathForFilePath(recent.path, CACHE_ROOT)).isCompleted;
-    }
+    book.completed = status->completed;
     for (const auto& [path, thumb] : frontThumbs) {
       if (path == recent.path) book.frontThumbPath = thumb;
     }
@@ -236,6 +306,8 @@ void BookshelfHome::loadUnreadShelf(const std::string& currentPath) {
     unread_.push_back(std::move(book));
   }
   unreadLoaded_ = true;
+  const UnreadFront& front = sessionUnreadFront();
+  if (!front.path.empty()) setUnreadFront(front.path, front.thumbPath, front.title, front.author);
 }
 
 
@@ -248,8 +320,14 @@ std::vector<std::string> BookshelfHome::unreadFrontCandidates() const {
   return candidates;
 }
 
+bool BookshelfHome::unreadFrontResolved() const { return sessionUnreadFront().resolved; }
+
+void BookshelfHome::markUnreadFrontResolved() { sessionUnreadFront().resolved = true; }
+
 void BookshelfHome::setUnreadFront(const std::string& path, const std::string& thumbPath, const std::string& title,
                                    const std::string& author) {
+  // Copies first: the arguments may be the session record itself.
+  sessionUnreadFront() = UnreadFront{true, path, thumbPath, title, author};
   for (Book& book : unread_) {
     if (book.path != path) continue;
     book.frontThumbPath = thumbPath;
@@ -733,13 +811,55 @@ bool loadSpriteMask(const char* path, const int x0, const int y0, const int x1, 
   file.close();
   return any;
 }
+
+// The picture as 4-bit pixels (0..14 grays from black to white, 15
+// transparent), as the art pack's portraits are stored.
+struct GrayImage {
+  int width = 0;
+  int height = 0;
+  std::unique_ptr<uint8_t[]> gray4;
+  uint8_t at(const int x, const int y) const { return pokemon::portraitPixel(gray4.get(), width, x, y); }
+};
+
+// Older art packs have no portraits: the Pokemon is cut out of its Pokedex
+// card instead (cleaner and larger than the battle sprite; the window skips the
+// card's header line, borders and name), falling back to the battle sprite.
+// The card is dithered, so a pixel belongs to the Pokemon when enough of its
+// 3x3 neighbourhood is inked; it keeps its own black or white.
+bool loadCardPicture(const uint16_t speciesId, GrayImage& out) {
+  char path[64]{};
+  SpriteMask mask;
+  if (!loadSpriteMask(pokemon::pokemonPokedexArtPath(speciesId, false, path, sizeof(path)), 110, 145, 886, 387, mask) &&
+      !loadSpriteMask(pokemon::pokemonSpeciesArtPath(speciesId, true, path, sizeof(path)), 0, 0, 1000, 1000, mask)) {
+    return false;
+  }
+  const int rowBytes = (mask.width + 1) / 2;
+  out.gray4.reset(new (std::nothrow) uint8_t[static_cast<size_t>(rowBytes) * mask.height]);
+  if (!out.gray4) return false;
+  out.width = mask.width;
+  out.height = mask.height;
+  for (int y = 0; y < mask.height; ++y) {
+    uint8_t* row = out.gray4.get() + static_cast<size_t>(y) * rowBytes;
+    std::memset(row, 0, rowBytes);
+    for (int x = 0; x < mask.width; ++x) {
+      int inked = 0;
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) inked += mask.at(x + dx, y + dy) ? 1 : 0;
+      }
+      const uint8_t value = inked < 2 ? pokemon::PORTRAIT_TRANSPARENT : (mask.at(x, y) ? 0 : 14);
+      row[x / 2] |= (x & 1) == 0 ? value << 4 : value;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 #endif
 
-bool BookshelfHome::Bookend::at(const int x, const int y) const {
-  if (x < 0 || y < 0 || x >= width || y >= height) return false;
-  const size_t i = static_cast<size_t>(y) * width + x;
-  return (bits[i >> 3] & (0x80 >> (i & 7))) != 0;
+uint8_t BookshelfHome::Bookend::at(const int x, const int y) const {
+  if (x < 0 || y < 0 || x >= width || y >= height) return BOOKEND_CLEAR;
+  const uint8_t byte = pixels[(static_cast<size_t>(y) * width + x) / 2];
+  return ((static_cast<size_t>(y) * width + x) & 1) == 0 ? byte >> 4 : byte & 0x0F;
 }
 
 void BookshelfHome::setBookend(const size_t shelf, const uint16_t speciesId) {
@@ -748,20 +868,17 @@ void BookshelfHome::setBookend(const size_t shelf, const uint16_t speciesId) {
   bookend = Bookend{};
   if (speciesId == 0) return;
 #if defined(CROSSINK_ENABLE_POKEMON)
-  // The picture is cut out of the Pokemon's Pokedex card (cleaner and larger
-  // than the battle sprite; the window skips the card's header line, borders
-  // and name), falling back to the battle sprite, then cropped to its shape.
-  char path[64]{};
-  SpriteMask mask;
-  if (!loadSpriteMask(pokemon::pokemonPokedexArtPath(speciesId, false, path, sizeof(path)), 110, 145, 886, 387,
-                      mask) &&
-      !loadSpriteMask(pokemon::pokemonSpeciesArtPath(speciesId, true, path, sizeof(path)), 0, 0, 1000, 1000, mask)) {
+  // The grayscale portrait (the same one the sleep screens use), or a cut-out
+  // of the older art.
+  GrayImage image;
+  if (!pokemon::loadPokemonPortrait(speciesId, image.width, image.height, image.gray4) &&
+      !loadCardPicture(speciesId, image)) {
     return;
   }
-  int minX = mask.width, minY = mask.height, maxX = -1, maxY = -1;
-  for (int y = 0; y < mask.height; ++y) {
-    for (int x = 0; x < mask.width; ++x) {
-      if (!mask.at(x, y)) continue;
+  int minX = image.width, minY = image.height, maxX = -1, maxY = -1;
+  for (int y = 0; y < image.height; ++y) {
+    for (int x = 0; x < image.width; ++x) {
+      if (image.at(x, y) == pokemon::PORTRAIT_TRANSPARENT) continue;
       minX = std::min(minX, x);
       maxX = std::max(maxX, x);
       minY = std::min(minY, y);
@@ -769,14 +886,75 @@ void BookshelfHome::setBookend(const size_t shelf, const uint16_t speciesId) {
     }
   }
   if (maxX < 0) return;
-  bookend.width = maxX - minX + 1 + 2 * BOOKEND_PAD;
-  bookend.height = maxY - minY + 1 + 2 * BOOKEND_PAD;
-  bookend.bits.assign((static_cast<size_t>(bookend.width) * bookend.height + 7) / 8, 0);
+
+  // Scaled once to its shelf size, averaging each block of source pixels so
+  // the artwork's shading survives (drawing then only copies pixels).
+  const int srcW = maxX - minX + 1;
+  const int srcH = maxY - minY + 1;
+  const int maxW = BOOKEND_MAX_WIDTH - 2 * BOOKEND_PAD;
+  int w = srcW, h = srcH;
+  if (w > maxW || h > BOOKEND_MAX_HEIGHT) {
+    if (int64_t{srcW} * BOOKEND_MAX_HEIGHT > int64_t{srcH} * maxW) {
+      w = maxW;
+      h = std::max(1, srcH * maxW / srcW);
+    } else {
+      h = BOOKEND_MAX_HEIGHT;
+      w = std::max(1, srcW * BOOKEND_MAX_HEIGHT / srcH);
+    }
+  }
+  bookend.width = w + 2 * BOOKEND_PAD;
+  bookend.height = h + 2 * BOOKEND_PAD;
+  // One byte per pixel while building; packed to 4 bits at the end.
+  std::vector<uint8_t> value(static_cast<size_t>(bookend.width) * bookend.height, BOOKEND_CLEAR);
+  auto cell = [&](const int x, const int y) -> uint8_t& { return value[static_cast<size_t>(y) * bookend.width + x]; };
+  for (int ty = 0; ty < h; ++ty) {
+    const int sy0 = minY + ty * srcH / h;
+    const int sy1 = std::max(sy0 + 1, minY + (ty + 1) * srcH / h);
+    for (int tx = 0; tx < w; ++tx) {
+      const int sx0 = minX + tx * srcW / w;
+      const int sx1 = std::max(sx0 + 1, minX + (tx + 1) * srcW / w);
+      int total = 0, opaque = 0, sum = 0;
+      for (int sy = sy0; sy < sy1; ++sy) {
+        for (int sx = sx0; sx < sx1; ++sx) {
+          ++total;
+          const uint8_t v = image.at(sx, sy);
+          if (v == pokemon::PORTRAIT_TRANSPARENT) continue;
+          ++opaque;
+          sum += v;
+        }
+      }
+      if (2 * opaque < total) continue;
+      // 0..14 to 0..BOOKEND_WHITE, rounded.
+      cell(tx + BOOKEND_PAD, ty + BOOKEND_PAD) =
+          static_cast<uint8_t>((sum * BOOKEND_WHITE + opaque * 7) / (opaque * 14));
+    }
+  }
+  image.gray4.reset();
+
+  // A crisp black outline on its edge, then a white halo following its shape,
+  // so it stands clear of the wallpaper with no box around it.
+  auto opaqueAt = [&](const int x, const int y) {
+    return x >= 0 && y >= 0 && x < bookend.width && y < bookend.height && cell(x, y) <= BOOKEND_WHITE;
+  };
+  auto nearOpaque = [&](const int x, const int y) {
+    for (int dy = -3; dy <= 3; ++dy) {
+      for (int dx = -3; dx <= 3; ++dx) {
+        if (dx * dx + dy * dy <= 10 && opaqueAt(x + dx, y + dy)) return true;
+      }
+    }
+    return false;
+  };
+  bookend.pixels.assign((value.size() + 1) / 2, 0);
   for (int y = 0; y < bookend.height; ++y) {
     for (int x = 0; x < bookend.width; ++x) {
-      if (!mask.at(minX - BOOKEND_PAD + x, minY - BOOKEND_PAD + y)) continue;
+      uint8_t v = cell(x, y);
+      if (v > BOOKEND_WHITE) {
+        if (nearOpaque(x, y)) v = BOOKEND_HALO;
+      } else if (!opaqueAt(x - 1, y) || !opaqueAt(x + 1, y) || !opaqueAt(x, y - 1) || !opaqueAt(x, y + 1)) {
+        v = 0;
+      }
       const size_t i = static_cast<size_t>(y) * bookend.width + x;
-      bookend.bits[i >> 3] |= 0x80 >> (i & 7);
+      bookend.pixels[i / 2] |= (i & 1) == 0 ? v << 4 : v;
     }
   }
 #else
@@ -785,29 +963,11 @@ void BookshelfHome::setBookend(const size_t shelf, const uint16_t speciesId) {
 }
 
 void BookshelfHome::drawBookend(const GfxRenderer& renderer, const Rect rect, const Bookend& bookend) const {
-  // The party leader sits on the board at its original size (scaled down only
-  // if it is wider than BOOKEND_MAX_WIDTH), with its own pixels, a crisp black
-  // outline on its filled silhouette (the inked share of each 3x3
-  // neighbourhood, so dithered areas count as solid) and a white halo
-  // following that shape, so it stands clear of the wallpaper (no box).
+  // The Pokemon stands on the board, prepared by setBookend() at its shelf
+  // size (scaled down further only if the shelf is lower). Its grays are
+  // dithered with a 4x4 ordered pattern anchored to the screen.
+  static constexpr uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
   if (bookend.width <= 0) return;
-  auto darkness = [&](const int x, const int y) {
-    int sum = 0;
-    for (int dy = -1; dy <= 1; ++dy) {
-      for (int dx = -1; dx <= 1; ++dx) sum += bookend.at(x + dx, y + dy) ? 1 : 0;
-    }
-    return sum;
-  };
-  auto solid = [&](const int x, const int y) { return darkness(x, y) >= 2; };
-  auto nearSolid = [&](const int x, const int y) {
-    for (int dy = -2; dy <= 2; ++dy) {
-      for (int dx = -2; dx <= 2; ++dx) {
-        if (dx * dx + dy * dy <= 5 && solid(x + dx, y + dy)) return true;
-      }
-    }
-    return false;
-  };
-
   const int64_t scale = std::min<int64_t>({int64_t{1} << 16, (int64_t{rect.width} << 16) / bookend.width,
                                            (int64_t{rect.height + BOOKEND_PAD} << 16) / bookend.height});
   if (scale <= 0) return;
@@ -819,13 +979,13 @@ void BookshelfHome::drawBookend(const GfxRenderer& renderer, const Rect rect, co
   renderer.fillRoundedRect(originX + outW / 5, rect.y + rect.height - 3, outW * 3 / 5, 6, 3, Color::DarkGray);
   for (int oy = 0; oy < outH; ++oy) {
     const int y = static_cast<int>((int64_t{oy} << 16) / scale);
+    const int py = originY + oy;
     for (int ox = 0; ox < outW; ++ox) {
-      const int x = static_cast<int>((int64_t{ox} << 16) / scale);
-      const bool inside = solid(x, y);
-      if (!inside && !nearSolid(x, y)) continue;
-      const bool edge = inside && (!solid(x - 1, y) || !solid(x + 1, y) || !solid(x, y - 1) || !solid(x, y + 1));
-      // Inside: the card's own pixels.
-      renderer.drawPixel(originX + ox, originY + oy, edge || (inside && bookend.at(x, y)));
+      const uint8_t v = bookend.at(static_cast<int>((int64_t{ox} << 16) / scale), y);
+      if (v == BOOKEND_CLEAR) continue;
+      const int px = originX + ox;
+      const bool black = v < BOOKEND_HALO && v * 255 < (BAYER[py & 3][px & 3] * 16 + 8) * BOOKEND_WHITE;
+      renderer.drawPixel(px, py, black);
     }
   }
 }
