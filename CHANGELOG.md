@@ -1,6 +1,12 @@
 ## [1.13.3] - 2026-10-11
 
+### Changed
+
+- Pokémon sleep screens: the Pokémon is drawn smaller, in proportion to its room, instead of filling most of it.
+
 ### Fixed
+
+- **Bookshelf** Home was still slow after waking the reader: waking from sleep restarts it, so the shelves were rebuilt from scratch every time (scanning the SD card for unread books, opening the face-on book, rereading reading stats). What the shelves need is now kept in a small cache on the SD card (`.crosspoint/bookshelf-cache.txt`): the card is scanned again only every 15 restarts (or when the cache is deleted), and each restart still shows a new random pick of unread books. The shelf wallpaper is also drawn faster.
 
 - Pokémon sleep screens on the **X3 and X4**: sometimes the default sleep screen appeared instead, because the new grayscale portrait left too little memory to draw the room (for example after a long reading session). The screen now falls back to the Pokémon's battle sprite in that case, as before the portraits, instead of giving up.
 

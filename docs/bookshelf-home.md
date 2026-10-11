@@ -39,10 +39,13 @@ Books stand spine-out with the title (and the author, when the spine is wide
 enough) written along the spine, each with its own width, height and binding
 - black, gray with a label, or light with gilt bands - and the page edges
 showing at the top; face-on books show their page block along the side.
-The pick of unread books stays the same until the reader restarts, then a new
-one is drawn. What Home learns while loading the shelves (which unread book
-stands face-on, which recent books are finished) is also kept until then, so
-coming back to Home only reloads what changed.
+The pick of unread books stays the same until the reader restarts (waking it
+from sleep counts), then a new one is drawn. What Home learns while loading
+the shelves - a pool of unread books from the card, which one stands face-on,
+which recent books are finished - is kept in `.crosspoint/bookshelf-cache.txt`
+on the SD card, so Home does not redo that work after every wake-up. The card
+is scanned again every 15 restarts so newly added books show up; delete that
+file to rescan right away.
 
 ## Using it
 
@@ -57,9 +60,9 @@ the book at the top).
 
 ## Notes
 
-- Books are found by scanning the SD card the first time Home opens after a
-  restart (folders up to three levels deep; hidden folders and the firmware's
-  own `pokemon`, `sleep` and `fonts` folders are skipped). On a very large
+- Books are found by scanning the SD card (folders up to three levels deep;
+  hidden folders and the firmware's own `pokemon`, `sleep` and `fonts`
+  folders are skipped). On a very large
   library only part of the card is scanned, so the pick comes from that part.
 - Titles of unread books come from their file names (except the face-on one,
   which shows its real title). Read books show the title and author from the
