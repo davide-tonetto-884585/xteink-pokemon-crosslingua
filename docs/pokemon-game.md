@@ -169,9 +169,15 @@ under the furniture and the four shades of gray the screen can show.
   finally columns and the Champion's crown.
 
 Under the ball the screen shows the Pokémon's name, its types, its level, the room it has
-reached and the level that unlocks the next one. The Pokémon's sprite comes from the art
-pack on the SD card; without it, the room is shown empty. Before you pick a starter, the
-regular sleep screen is shown instead.
+reached and the level that unlocks the next one. Before you pick a starter, the regular
+sleep screen is shown instead.
+
+Choose **Pokémon (full screen)** instead to see the same room filling the whole screen,
+with a bigger Pokémon and the same details on a panel along the bottom.
+
+The Pokémon itself is its official artwork in shades of gray, from the `sleep` folder of
+the art pack on the SD card. With an older art pack that lacks that folder, the smaller
+battle sprite is used instead; without any art pack, the room is shown empty.
 
 ## Language support
 

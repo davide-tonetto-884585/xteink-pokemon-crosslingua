@@ -584,7 +584,9 @@ void SleepActivity::onEnter() {
     case (CrossPointSettings::SLEEP_SCREEN_MODE::DASHBOARD_SLEEP):
       return renderDashboardSleepScreen();
     case (CrossPointSettings::SLEEP_SCREEN_MODE::POKEMON_SLEEP):
-      return renderPokemonSleepScreen();
+      return renderPokemonSleepScreen(false);
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::POKEMON_FULL_SLEEP):
+      return renderPokemonSleepScreen(true);
     default:
       return renderDefaultSleepScreen();
   }
@@ -958,9 +960,9 @@ void SleepActivity::renderDashboardSleepScreen() const {
 // A random party member asleep in its Poke Ball (see PokemonSleepScreen). The
 // scene is generated into a grayscale BMP and shown through the same path as
 // custom sleep images, so it gets their dithering and gray-level handling.
-void SleepActivity::renderPokemonSleepScreen() const {
+void SleepActivity::renderPokemonSleepScreen(const bool fullScreen) const {
 #if defined(CROSSINK_ENABLE_POKEMON)
-  if (pokemon::writePokemonSleepImage(renderer)) {
+  if (pokemon::writePokemonSleepImage(renderer, fullScreen)) {
     FsFile file;
     if (Storage.openFileForRead("SLP", pokemon::POKEMON_SLEEP_IMAGE_PATH, file)) {
       Bitmap bitmap(file, true,
@@ -971,6 +973,8 @@ void SleepActivity::renderPokemonSleepScreen() const {
       if (success) return;
     }
   }
+#else
+  (void)fullScreen;
 #endif
   renderDefaultSleepScreen();
 }

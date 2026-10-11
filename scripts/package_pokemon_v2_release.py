@@ -25,6 +25,7 @@ def expected_art() -> dict[Path, tuple[int, int]]:
         files[Path("heroes/back") / f"{species_id:03}.bmp"] = (120, 90)
         files[Path("pokedex/portrait") / f"{species_id:03}.bmp"] = (472, 708)
         files[Path("pokedex/landscape") / f"{species_id:03}.bmp"] = (288, 432)
+        files[Path("sleep") / f"{species_id:03}.bmp"] = (240, 240)
     for item in ITEMS:
         files[Path("items") / f"{item}.bmp"] = (32, 32)
         files[Path("heroes/items") / f"{item}.bmp"] = (64, 64)
@@ -41,6 +42,11 @@ def expected_art() -> dict[Path, tuple[int, int]]:
     for gym_index in range(1, 14):
         files[Path("trainers") / f"{gym_index:02}.bmp"] = (32, 32)
     return files
+
+
+def expected_bits(relative: Path) -> int:
+    """Sleep portraits are 4-bit grayscale (generate_pokemon_sleep_art.py); the rest is 1-bit."""
+    return 4 if relative.parts[0] == "sleep" else 1
 
 
 def bmp_info(path: Path) -> tuple[int, int, int]:
@@ -63,7 +69,7 @@ def _validate_bmp_bytes(data: bytes, label: str) -> tuple[int, int, int]:
 
     if dib_size < 40 or width <= 0 or height == 0:
         raise ValueError(error)
-    if planes != 1 or bits != 1 or compression != 0:
+    if planes != 1 or bits not in (1, 4) or compression != 0:
         raise ValueError(error)
 
     absolute_height = abs(height)
@@ -111,7 +117,7 @@ def validate_art(root: Path, allow_extra: bool = False) -> list[dict[str, object
     for relative, dimensions in sorted(expected.items(), key=lambda item: str(item[0])):
         path = root / relative
         width, height, bits = bmp_info(path)
-        if (width, height) != dimensions or bits != 1:
+        if (width, height) != dimensions or bits != expected_bits(relative):
             raise ValueError(f"invalid BMP {relative}: {width}x{height} {bits}bpp")
         assets.append({"path": f"pokemon/{relative.as_posix()}", "sha256": sha256(path),
                        "width": width, "height": height, "bits_per_pixel": bits})
@@ -294,7 +300,7 @@ def verify_archive(archive: Path, firmware: Path, notice: Path) -> None:
             name = f"pokemon/{relative.as_posix()}"
             data = package.read(name)
             width, height, bits = _bmp_bytes_info(data)
-            if (width, height) != dimensions or bits != 1:
+            if (width, height) != dimensions or bits != expected_bits(relative):
                 raise ValueError(f"invalid archived BMP {name}: {width}x{height} {bits}bpp")
             entry = manifest_assets[name]
             if entry.get("sha256") != sha256_bytes(data):

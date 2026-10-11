@@ -30,23 +30,36 @@ uint8_t sleepRoomTierForLevel(uint8_t level);
 // First level of a 1-based tier; 0 for an invalid tier.
 uint8_t sleepRoomTierFirstLevel(uint8_t tier);
 
+// PokeBall: the room is seen through the window of a Poke Ball in the upper
+// part of the screen, with the labels underneath. FullScreen: the room fills
+// the whole screen and the labels sit on a panel along the bottom edge.
+enum class SleepRoomLayout : uint8_t { PokeBall, FullScreen };
+
 struct SleepRoomSpec {
   PokemonType primary = PokemonType::Normal;
   PokemonType secondary = PokemonType::None;
   uint8_t tier = 1;
   uint8_t badges = 0;  // gym badges shown in the badge case (tier 6+)
   uint32_t seed = 1;   // varies textures (brick tones, planks) between screens
+  SleepRoomLayout layout = SleepRoomLayout::PokeBall;
 };
 
-// A 1-bit sprite (the art pack's hero sprites). Rows are packed MSB first,
-// (width + 7) / 8 bytes each. `ink` marks dark pixels; `opaque` marks the
-// pixels that belong to the Pokemon (everything else shows the room).
+// The sleeping Pokemon, in one of two forms:
+//   - a 4-bit grayscale portrait (the art pack's sleep/NNN.bmp): `gray4` rows
+//     of (width + 1) / 2 bytes, high nibble first; values 0..14 are grays from
+//     black to white, 15 is transparent;
+//   - a 1-bit sprite (the art pack's hero sprites): rows packed MSB first,
+//     (width + 7) / 8 bytes each; `ink` marks dark pixels, `opaque` the pixels
+//     that belong to the Pokemon.
 struct SleepRoomSprite {
   int width = 0;
   int height = 0;
+  const uint8_t* gray4 = nullptr;
   const uint8_t* ink = nullptr;
   const uint8_t* opaque = nullptr;
 };
+
+constexpr uint8_t SLEEP_ROOM_GRAY4_TRANSPARENT = 15;
 
 // Marks as transparent every white pixel connected to the sprite's border, so
 // the white background of an art-pack sprite does not paint a box over the
@@ -60,10 +73,12 @@ class SleepRoomRenderer {
   SleepRoomRenderer(const SleepRoomRenderer&) = delete;
   SleepRoomRenderer& operator=(const SleepRoomRenderer&) = delete;
 
-  // Builds the scene for a screen `screenWidth` pixels wide. Returns false if
-  // the display list could not be allocated.
-  bool build(const SleepRoomSpec& spec, int screenWidth);
-  void setSprite(const SleepRoomSprite& sprite) { sprite_ = sprite; }
+  // Sets the sleeping Pokemon. Call before build(): the scene places the
+  // "z Z" above it. The data must outlive the renderer's use.
+  void setSprite(const SleepRoomSprite& sprite);
+  // Builds the scene for a screenWidth x screenHeight portrait screen.
+  // Returns false if the display list could not be allocated.
+  bool build(const SleepRoomSpec& spec, int screenWidth, int screenHeight);
 
   // Number of rows the scene covers from the top of the screen; rows below
   // are plain white and need not be rendered.
@@ -71,7 +86,10 @@ class SleepRoomRenderer {
   // Writes screenWidth luminance values (0 = black, 255 = white) for row y.
   void renderRow(int y, uint8_t* out) const;
 
-  // Centre of the ball's button, where the caller prints the level.
+  // FullScreen layout: the label panel along the bottom edge.
+  int panelTop() const { return panelTop_; }
+  int panelBottom() const { return panelBottom_; }
+  // PokeBall layout: centre of the ball's button, where the caller prints the level.
   int buttonCenterX() const;
   int buttonCenterY() const;
   int buttonRadius() const;
@@ -99,12 +117,25 @@ class SleepRoomRenderer {
   void release();
   uint8_t shadeRoom(int x, int y, int rowT, int rowSurface) const;
   uint8_t shadeShell(int x, int y, uint8_t room) const;
+  uint8_t shadeFrame(int x, int y, uint8_t room) const;
   void drawPrimsRow(int y, uint8_t* out, int x0, int x1, int keyFrom, int keyTo, size_t& index) const;
   void drawSpriteRow(int y, uint8_t* out, int x0, int x1) const;
 
   SleepRoomSpec spec_{};
   int width_ = 0;
+  int height_ = 0;
   int ballCx_ = 0;
+  bool fullScreen_ = false;
+  int vy_ = 0;      // vanishing point row
+  int f_ = 1;       // focal length, px
+  int sceneH_ = 0;  // rows the scene covers
+  int panelTop_ = 0;
+  int panelBottom_ = 0;
+  // Sprite placement: drawn at drawW_ x drawH_, its opaque box's bottom-centre
+  // on (spriteBaseX_, spriteBaseY_).
+  int drawW_ = 0;
+  int drawH_ = 0;
+  int opaqueLeft_ = 0, opaqueRight_ = 0, opaqueBottom_ = 0, opaqueTop_ = 0;
   int spriteBaseX_ = 0;
   int spriteBaseY_ = 0;
   int spriteKey_ = 0;

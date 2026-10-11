@@ -28,6 +28,15 @@ TEST(PokemonArtPath, BuildsDedicatedOrientationSpecificPokedexPaths) {
   EXPECT_STREQ(path, "/pokemon/pokedex/portrait/151.bmp");
 }
 
+TEST(PokemonArtPath, BuildsSleepPortraitPaths) {
+  char path[64]{};
+  ASSERT_NE(pokemon::pokemonSleepArtPath(6, path, sizeof(path)), nullptr);
+  EXPECT_STREQ(path, "/pokemon/sleep/006.bmp");
+  EXPECT_EQ(pokemon::pokemonSleepArtPath(0, path, sizeof(path)), nullptr);
+  EXPECT_STREQ(path, "");
+  EXPECT_EQ(pokemon::pokemonSleepArtPath(152, path, sizeof(path)), nullptr);
+}
+
 TEST(PokemonArtPath, BuildsStonePathsButLeavesLinkCableBlank) {
   char path[80]{};
   ASSERT_NE(pokemon::pokemonItemArtPath(pokemon::EvolutionItem::ThunderStone, false, path, sizeof(path)), nullptr);

@@ -18,10 +18,11 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(PACKAGE)
 
 
-def write_bmp(path: Path, width: int, height: int) -> None:
-    row_size = ((width + 31) // 32) * 4
+def write_bmp(path: Path, width: int, height: int, bits: int = 1) -> None:
+    row_size = ((width * bits + 31) // 32) * 4
     image_size = row_size * height
-    pixel_offset = 62
+    colours = 1 << bits
+    pixel_offset = 54 + colours * 4
     file_size = pixel_offset + image_size
     header = bytearray(pixel_offset)
     header[:2] = b"BM"
@@ -30,19 +31,57 @@ def write_bmp(path: Path, width: int, height: int) -> None:
     struct.pack_into("<I", header, 14, 40)
     struct.pack_into("<ii", header, 18, width, height)
     struct.pack_into("<H", header, 26, 1)
-    struct.pack_into("<H", header, 28, 1)
+    struct.pack_into("<H", header, 28, bits)
     struct.pack_into("<I", header, 34, image_size)
-    struct.pack_into("<I", header, 46, 2)
-    header[54:62] = b"\x00\x00\x00\x00\xff\xff\xff\x00"
+    struct.pack_into("<I", header, 46, colours)
+    header[58:62] = b"\xff\xff\xff\x00"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(header + bytes(image_size))
 
 
+try:
+    import PIL  # noqa: F401
+    HAVE_PILLOW = True
+except ImportError:  # the art converters need Pillow; the packager does not
+    HAVE_PILLOW = False
+
+SLEEP_SPEC = importlib.util.spec_from_file_location(
+    "generate_pokemon_sleep_art", REPO_ROOT / "scripts/generate_pokemon_sleep_art.py"
+)
+SLEEP_ART = importlib.util.module_from_spec(SLEEP_SPEC)
+assert SLEEP_SPEC.loader is not None
+if HAVE_PILLOW:
+    SLEEP_SPEC.loader.exec_module(SLEEP_ART)
+
+
 class PokemonArtPackTest(unittest.TestCase):
+    @unittest.skipUnless(HAVE_PILLOW, "Pillow is not installed")
+    def test_sleep_portrait_is_a_bottom_aligned_4bit_bmp_with_transparency(self) -> None:
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            art = Image.new("RGBA", (100, 60), (0, 0, 0, 0))
+            for x in range(20, 80):
+                for y in range(10, 50):
+                    art.putpixel((x, y), (200, 120, 40, 255))
+            art.save(root / "1.png")
+            SLEEP_ART.build(root, root / "out", species_count=1)
+            output = root / "out" / "sleep" / "001.bmp"
+            self.assertEqual(PACKAGE.bmp_info(output), (240, 240, 4))
+            data = output.read_bytes()
+            offset = struct.unpack_from("<I", data, 10)[0]
+            stride = ((240 * 4 + 31) // 32) * 4
+            # Rows are bottom-up: the first stored row is the image's bottom
+            # row, where the artwork is anchored; the top row is transparent.
+            bottom, top = data[offset:offset + stride], data[offset + 239 * stride:offset + 240 * stride]
+            self.assertTrue(all(byte == 0xFF for byte in top[:120]))
+            self.assertTrue(any(byte != 0xFF for byte in bottom[:120]))
+
     def make_complete_source(self, root: Path) -> Path:
         source = root / "source"
         for relative, dimensions in PACKAGE.expected_art().items():
-            write_bmp(source / relative, *dimensions)
+            write_bmp(source / relative, *dimensions, PACKAGE.expected_bits(relative))
         return source
 
     def test_release_requires_both_pokedex_orientations_for_every_species(self) -> None:
@@ -52,8 +91,9 @@ class PokemonArtPackTest(unittest.TestCase):
         self.assertEqual(expected[Path("pokedex/portrait/151.bmp")], (472, 708))
         self.assertEqual(expected[Path("pokedex/landscape/151.bmp")], (288, 432))
         # 614 species/item/pokedex art (original) + 151 back sprites + 77 bag
-        # item icons (ids 7-83) + 8 badge icons + 13 trainer portraits.
-        self.assertEqual(len(expected), 614 + 151 + 77 + 8 + 13)
+        # item icons (ids 7-83) + 8 badge icons + 13 trainer portraits + 151
+        # sleep portraits.
+        self.assertEqual(len(expected), 614 + 151 + 77 + 8 + 13 + 151)
 
     def test_release_requires_back_sprites_bag_item_icons_badges_and_trainers(self) -> None:
         expected = PACKAGE.expected_art()
@@ -84,7 +124,7 @@ class PokemonArtPackTest(unittest.TestCase):
             root = Path(temporary)
             source = root / "source"
             for relative, dimensions in PACKAGE.expected_art().items():
-                write_bmp(source / relative, *dimensions)
+                write_bmp(source / relative, *dimensions, PACKAGE.expected_bits(relative))
             write_bmp(source / "sprites/152.bmp", 40, 30)
             write_bmp(source / "egg.bmp", 40, 30)
 

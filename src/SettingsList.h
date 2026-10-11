@@ -336,7 +336,7 @@ inline SettingInfo buildSleepScreenSetting() {
        StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_READING_STATS, StrId::STR_THEME_MINIMAL,
        StrId::STR_THEME_MINIMAL_STATS, StrId::STR_THEME_DASHBOARD,
 #if defined(CROSSINK_ENABLE_POKEMON)
-       StrId::STR_POKEMON,
+       StrId::STR_POKEMON, StrId::STR_POKEMON_SLEEP_FULL,
 #endif
        StrId::STR_QUICK_RESUME},
       "sleepScreen", StrId::STR_CAT_DISPLAY);
@@ -354,6 +354,7 @@ inline SettingInfo buildSleepScreenSetting() {
       static_cast<uint8_t>(CrossPointSettings::DASHBOARD_SLEEP),
 #if defined(CROSSINK_ENABLE_POKEMON)
       static_cast<uint8_t>(CrossPointSettings::POKEMON_SLEEP),
+      static_cast<uint8_t>(CrossPointSettings::POKEMON_FULL_SLEEP),
 #endif
       static_cast<uint8_t>(CrossPointSettings::QUICK_RESUME),
   });

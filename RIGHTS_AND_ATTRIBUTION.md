@@ -21,6 +21,10 @@ redistribution permission.
   [PokeAPI Sprites](https://github.com/PokeAPI/sprites), revision
   `4bc9d60186fe2e499ee2f3d4d1b796806cb99a67`. The X3 package contains
   one-bit adaptations and larger presentation variants derived from them.
+- **Sleep-screen portraits:** Original-151 official artwork from
+  [PokeAPI Sprites](https://github.com/PokeAPI/sprites), revision
+  `4bc9d60186fe2e499ee2f3d4d1b796806cb99a67`, converted to 4-bit grayscale
+  portraits with a transparent background.
 - **Evolution-stone icons:** Moon, Fire, Thunder, Water, and Leaf Stone images
   from [PokéSprite](https://github.com/msikma/pokesprite), revision
   `c5aaa610ff2acdf7fd8e2dccd181bca8be9fcb3e`. The X3 package contains

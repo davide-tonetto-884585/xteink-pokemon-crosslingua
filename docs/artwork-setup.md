@@ -37,6 +37,12 @@ sprites/pokemon/versions/generation-vii/icons/1.png
 sprites/pokemon/versions/generation-vii/icons/151.png
 ```
 
+### Sleep-screen portraits
+
+Use the same PokeAPI Sprites revision, folder
+`sprites/pokemon/other/official-artwork/`, files `1.png` through `151.png`
+(475×475 RGBA).
+
 ### Evolution stones
 
 Use [PokéSprite](https://github.com/msikma/pokesprite) revision
@@ -197,7 +203,26 @@ pokemon-art-output/pokedex/landscape/001.bmp–151.bmp   # 288×432
 All output is one-bit BMP data prepared on the computer so the X3 can stream it
 without allocating another framebuffer.
 
-## 5. Build the public artwork archive
+## 5. Convert sleep-screen portraits
+
+```sh
+python scripts/generate_pokemon_sleep_art.py \
+  --source pokemon-art-source/pokeapi-sprites/sprites/pokemon/other/official-artwork \
+  --output pokemon-art-output
+```
+
+This adds:
+
+```text
+pokemon-art-output/sleep/001.bmp–151.bmp   # 240×240, 4-bit grayscale
+```
+
+Unlike the rest of the pack, these keep 15 gray levels (palette entry 15 marks
+transparent pixels): the Pokémon sleep screens composite them into the room
+and dither the whole picture on the device. Without them the sleep screens
+fall back to the one-bit hero sprites.
+
+## 6. Build the public artwork archive
 
 Firmware and artwork are published as **separate** release assets (see
 [Installation](installation.md)): `.github/workflows/release.yml` builds and publishes the
@@ -208,7 +233,7 @@ hand, since the converted images are deliberately never committed to this reposi
 [Release checklist](release-checklist.md)).
 
 `scripts/package_pokemon_v2_release.py` can still validate a local pack end-to-end
-(rejects missing files, wrong dimensions, non-one-bit images, and manifest/checksum
+(rejects missing files, wrong dimensions, wrong bit depths, and manifest/checksum
 mismatches) and bundle it with a firmware binary into a self-contained
 `xteink-pokemon-<device>-full-v<version>.zip` for local testing or an alternate
 distribution channel:
@@ -253,6 +278,7 @@ paths are:
 /pokemon/trainers/
 /pokemon/pokedex/portrait/
 /pokemon/pokedex/landscape/
+/pokemon/sleep/
 /pokemon/manifest.json
 ```
 
