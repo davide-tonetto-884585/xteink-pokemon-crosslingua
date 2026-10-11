@@ -1,13 +1,15 @@
+## [1.13.3] - 2026-10-11
+
+### Fixed
+
+- Pokémon sleep screens on the **X3 and X4**: sometimes the default sleep screen appeared instead, because the new grayscale portrait left too little memory to draw the room (for example after a long reading session). The screen now falls back to the Pokémon's battle sprite in that case, as before the portraits, instead of giving up.
+
 ## [1.13.2] - 2026-10-11
 
 ### Changed
 
 - **Bookshelf** Home: the Pokémon on the shelves are now drawn from their official artwork in shades of gray, the same portraits as the Pokémon sleep screens (from the `sleep` folder of the SD-card art pack; with an older pack they are cut out of the Pokédex card as before).
 - **Bookshelf** Home loads faster: coming back to Home no longer opens the face-on unread book again or rereads the reading stats of every recent book, and the Pokémon on the shelves are prepared once instead of being recomputed pixel by pixel at every redraw, so moving the selection with the buttons is quicker too.
-
-### Fixed
-
-- Pokémon sleep screens on the **X3 and X4**: sometimes the default sleep screen appeared instead, because the new grayscale portrait left too little memory to draw the room (for example after a long reading session). The screen now falls back to the Pokémon's battle sprite in that case, as before the portraits, instead of giving up.
 
 ## [1.13.1] - 2026-10-11
 
