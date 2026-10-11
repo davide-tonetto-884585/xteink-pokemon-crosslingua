@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -140,17 +141,7 @@ struct UnreadScan {
   }
 };
 
-std::vector<std::string>& sessionUnreadPicks() {
-  static std::vector<std::string> picks;
-  return picks;
-}
-
-bool& sessionUnreadScanned() {
-  static bool scanned = false;
-  return scanned;
-}
-
-// The face-on unread book found this session (path empty: none was found).
+// The face-on unread book (path empty: none was found).
 struct UnreadFront {
   bool resolved = false;
   std::string path;
@@ -158,11 +149,6 @@ struct UnreadFront {
   std::string title;
   std::string author;
 };
-
-UnreadFront& sessionUnreadFront() {
-  static UnreadFront front;
-  return front;
-}
 
 // What loadReadShelf() learnt about each recent book (whether the file is
 // still there, whether it was finished), kept while the recent-books list is
@@ -179,8 +165,104 @@ struct ReadShelfCache {
   std::vector<ReadShelfStatus> books;
 };
 
-ReadShelfCache& sessionReadShelf() {
-  static ReadShelfCache cache;
+// What the shelves need from the SD card, kept in SHELF_CACHE_PATH. Waking
+// from sleep restarts the reader, so a cache in memory alone would be lost
+// every time: the card scan, the face-on book's EPUB and the reading stats
+// would all be redone on nearly every Home.
+struct ShelfCache {
+  bool loaded = false;  // read from the card this boot
+  bool dirty = false;
+  bool picked = false;   // unread shelf drawn from the pool this boot
+  bool scanned = false;  // the pool comes from a card scan
+  uint16_t bootsSinceScan = 0;
+  std::vector<std::string> pool;  // unread books found by the last scan
+  std::vector<std::string> picks;
+  UnreadFront front;
+  ReadShelfCache read;
+};
+
+constexpr const char* SHELF_CACHE_PATH = "/.crosspoint/bookshelf-cache.txt";
+constexpr size_t SHELF_CACHE_MAX_BYTES = 24 * 1024;
+// Unread books kept from one scan; each boot shows a fresh random handful of them.
+constexpr size_t UNREAD_POOL = 80;
+// Boots between two scans of the card, so books added to it show up.
+constexpr uint16_t RESCAN_AFTER_BOOTS = 15;
+
+std::vector<std::string> splitTabs(const std::string& text) {
+  std::vector<std::string> fields;
+  size_t start = 0;
+  for (size_t tab; (tab = text.find('\t', start)) != std::string::npos; start = tab + 1) {
+    fields.push_back(text.substr(start, tab - start));
+  }
+  fields.push_back(text.substr(start));
+  return fields;
+}
+
+// Tabs and line breaks separate fields and records in the cache file.
+std::string cacheField(const std::string& text) {
+  std::string out = text;
+  std::replace_if(out.begin(), out.end(), [](const char c) { return c == '\t' || c == '\n' || c == '\r'; }, ' ');
+  return out;
+}
+
+void readShelfCache(ShelfCache& cache) {
+  FsFile file;
+  if (!Storage.openFileForRead("SHELF", SHELF_CACHE_PATH, file)) return;
+  const size_t size = file.fileSize();
+  std::string text;
+  if (size > 0 && size <= SHELF_CACHE_MAX_BYTES) {
+    text.resize(size);
+    if (file.read(&text[0], size) != static_cast<int>(size)) text.clear();
+  }
+  file.close();
+  size_t start = 0;
+  while (start < text.size()) {
+    size_t end = text.find('\n', start);
+    if (end == std::string::npos) end = text.size();
+    const std::string line = text.substr(start, end - start);
+    start = end + 1;
+    if (line.size() < 2 || line[1] != ' ') continue;
+    const std::string value = line.substr(2);
+    switch (line[0]) {
+      case 'N':
+        cache.scanned = true;
+        cache.bootsSinceScan = static_cast<uint16_t>(std::strtoul(value.c_str(), nullptr, 10));
+        break;
+      case 'P':
+        cache.pool.push_back(value);
+        break;
+      case 'F': {
+        const auto fields = splitTabs(value);
+        if (fields.size() == 5) cache.front = UnreadFront{fields[0] == "1", fields[1], fields[2], fields[3], fields[4]};
+        break;
+      }
+      case 'R':
+        cache.read.signature = static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, 16));
+        break;
+      case 'S': {
+        ReadShelfStatus status;
+        unsigned flags = 0;
+        unsigned long key = 0;
+        if (std::sscanf(value.c_str(), "%lx %u", &key, &flags) == 2) {
+          status.key = static_cast<uint32_t>(key);
+          status.exists = (flags & 1U) != 0;
+          status.completed = (flags & 2U) != 0;
+          cache.read.books.push_back(status);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+ShelfCache& shelfCache() {
+  static ShelfCache cache;
+  if (!cache.loaded) {
+    cache.loaded = true;
+    readShelfCache(cache);
+  }
   return cache;
 }
 
@@ -190,6 +272,11 @@ uint32_t recentBooksSignature() {
     hash = (hash ^ bookshelf::keyForPath(recent.path.c_str())) * 16777619U;
   }
   return hash;
+}
+
+bool isRecentBook(const std::string& path) {
+  const auto& recents = RECENT_BOOKS.getBooks();
+  return std::any_of(recents.begin(), recents.end(), [&path](const RecentBook& recent) { return recent.path == path; });
 }
 
 void drawWrappedLines(const GfxRenderer& renderer, int fontId, int x, int& y, int width, const char* text, int maxLines,
@@ -238,11 +325,13 @@ void moveFrontBookInward(std::vector<BookshelfHome::Book>& books) {
 void BookshelfHome::loadReadShelf(const std::string& currentPath,
                                   const std::vector<std::pair<std::string, std::string>>& frontThumbs) {
   read_.clear();
-  ReadShelfCache& cache = sessionReadShelf();
+  ShelfCache& shelf = shelfCache();
+  ReadShelfCache& cache = shelf.read;
   const uint32_t signature = recentBooksSignature();
   if (cache.signature != signature) {
     cache.signature = signature;
     cache.books.clear();
+    shelf.dirty = true;
   }
   for (const RecentBook& recent : RECENT_BOOKS.getBooks()) {
     if (read_.size() >= MAX_READ_BOOKS) break;
@@ -259,6 +348,7 @@ void BookshelfHome::loadReadShelf(const std::string& currentPath,
       }
       cache.books.push_back(known);
       status = cache.books.end() - 1;
+      shelf.dirty = true;
     }
     if (!status->exists) continue;
     Book book;
@@ -277,27 +367,53 @@ void BookshelfHome::loadReadShelf(const std::string& currentPath,
 }
 
 void BookshelfHome::loadUnreadShelf(const std::string& currentPath) {
-  if (!sessionUnreadScanned()) {
-    std::vector<std::string> exclude;
-    for (const RecentBook& recent : RECENT_BOOKS.getBooks()) exclude.push_back(recent.path);
-    UnreadScan scan;
-    // Over-sample: a few picks may turn out to be already started.
-    scan.capacity = UNREAD_PICKS + 10;
-    scan.random = randomSeed() | 1U;
-    scan.exclude = &exclude;
-    scan.walk("/", 0);
-    auto& picks = sessionUnreadPicks();
-    picks.clear();
-    for (const std::string& path : scan.picks) {
-      if (picks.size() >= UNREAD_PICKS) break;
-      if (!hasStartedReading(path)) picks.push_back(path);
+  ShelfCache& cache = shelfCache();
+  if (!cache.picked) {
+    if (!cache.scanned || cache.bootsSinceScan >= RESCAN_AFTER_BOOTS) {
+      std::vector<std::string> exclude;
+      for (const RecentBook& recent : RECENT_BOOKS.getBooks()) exclude.push_back(recent.path);
+      UnreadScan scan;
+      // Over-sample: a few picks may turn out to be already started.
+      scan.capacity = UNREAD_POOL + 10;
+      scan.random = randomSeed() | 1U;
+      scan.exclude = &exclude;
+      scan.walk("/", 0);
+      cache.pool.clear();
+      for (const std::string& path : scan.picks) {
+        if (cache.pool.size() >= UNREAD_POOL) break;
+        if (!hasStartedReading(path)) cache.pool.push_back(path);
+      }
+      cache.scanned = true;
+      cache.bootsSinceScan = 0;
+      cache.front = UnreadFront{};
+      LOG_INF("SHELF", "Unread scan: visited=%d books=%u kept=%u", scan.visited, static_cast<unsigned>(scan.seen),
+              static_cast<unsigned>(cache.pool.size()));
+    } else {
+      ++cache.bootsSinceScan;
     }
-    sessionUnreadScanned() = true;
-    LOG_INF("SHELF", "Unread scan: visited=%d books=%u picked=%u", scan.visited, static_cast<unsigned>(scan.seen),
-            static_cast<unsigned>(picks.size()));
+    // A book opened since the scan is on the recent list now, not unread.
+    if (!cache.front.path.empty() &&
+        (isRecentBook(cache.front.path) || !Storage.exists(cache.front.thumbPath.c_str()))) {
+      cache.front = UnreadFront{};
+    }
+    // A new random handful from the pool, the face-on book (if any) first.
+    std::vector<std::string> candidates;
+    for (const std::string& path : cache.pool) {
+      if (!isRecentBook(path) && path != cache.front.path) candidates.push_back(path);
+    }
+    uint32_t random = randomSeed() | 1U;
+    for (size_t k = candidates.size(); k > 1; --k) std::swap(candidates[k - 1], candidates[nextRandom(random) % k]);
+    cache.picks.clear();
+    if (!cache.front.path.empty()) cache.picks.push_back(cache.front.path);
+    for (const std::string& path : candidates) {
+      if (cache.picks.size() >= UNREAD_PICKS) break;
+      cache.picks.push_back(path);
+    }
+    cache.picked = true;
+    cache.dirty = true;
   }
   unread_.clear();
-  for (const std::string& path : sessionUnreadPicks()) {
+  for (const std::string& path : cache.picks) {
     if (path == currentPath) continue;
     Book book;
     book.path = path;
@@ -306,10 +422,35 @@ void BookshelfHome::loadUnreadShelf(const std::string& currentPath) {
     unread_.push_back(std::move(book));
   }
   unreadLoaded_ = true;
-  const UnreadFront& front = sessionUnreadFront();
+  const UnreadFront front = cache.front;
   if (!front.path.empty()) setUnreadFront(front.path, front.thumbPath, front.title, front.author);
 }
 
+void BookshelfHome::saveCache() {
+  ShelfCache& cache = shelfCache();
+  if (!cache.dirty) return;
+  std::string text;
+  char line[48];
+  snprintf(line, sizeof(line), "N %u\n", static_cast<unsigned>(cache.bootsSinceScan));
+  text += line;
+  for (const std::string& path : cache.pool) text += "P " + cacheField(path) + "\n";
+  const UnreadFront& front = cache.front;
+  text += std::string("F ") + (front.resolved ? "1" : "0") + "\t" + cacheField(front.path) + "\t" +
+          cacheField(front.thumbPath) + "\t" + cacheField(front.title) + "\t" + cacheField(front.author) + "\n";
+  snprintf(line, sizeof(line), "R %08lx\n", static_cast<unsigned long>(cache.read.signature));
+  text += line;
+  for (const ReadShelfStatus& status : cache.read.books) {
+    snprintf(line, sizeof(line), "S %08lx %u\n", static_cast<unsigned long>(status.key),
+             (status.exists ? 1U : 0U) | (status.completed ? 2U : 0U));
+    text += line;
+  }
+  Storage.mkdir("/.crosspoint");
+  FsFile file;
+  if (!Storage.openFileForWrite("SHELF", SHELF_CACHE_PATH, file)) return;
+  const bool ok = file.write(text.data(), text.size()) == text.size();
+  file.close();
+  if (ok) cache.dirty = false;
+}
 
 std::vector<std::string> BookshelfHome::unreadFrontCandidates() const {
   // Only among books that will actually fit on the shelf.
@@ -320,14 +461,20 @@ std::vector<std::string> BookshelfHome::unreadFrontCandidates() const {
   return candidates;
 }
 
-bool BookshelfHome::unreadFrontResolved() const { return sessionUnreadFront().resolved; }
+bool BookshelfHome::unreadFrontResolved() const { return shelfCache().front.resolved; }
 
-void BookshelfHome::markUnreadFrontResolved() { sessionUnreadFront().resolved = true; }
+void BookshelfHome::markUnreadFrontResolved() {
+  ShelfCache& cache = shelfCache();
+  if (!cache.front.resolved) cache.dirty = true;
+  cache.front.resolved = true;
+}
 
 void BookshelfHome::setUnreadFront(const std::string& path, const std::string& thumbPath, const std::string& title,
                                    const std::string& author) {
-  // Copies first: the arguments may be the session record itself.
-  sessionUnreadFront() = UnreadFront{true, path, thumbPath, title, author};
+  // Copies first: the arguments may be the cached record itself.
+  ShelfCache& cache = shelfCache();
+  if (cache.front.path != path) cache.dirty = true;
+  cache.front = UnreadFront{true, path, thumbPath, title, author};
   for (Book& book : unread_) {
     if (book.path != path) continue;
     book.frontThumbPath = thumbPath;
@@ -375,12 +522,17 @@ void BookshelfHome::render(const GfxRenderer& renderer, const Rect area, const C
 // then drawn on top on its own white or solid background.
 void BookshelfHome::drawWallpaper(const GfxRenderer& renderer, const Rect area) const {
   constexpr int rowBytes = (bookshelf::WALLPAPER_TILE_W + 7) / 8;
+  static_assert(bookshelf::WALLPAPER_TILE_W % 8 == 0, "tile rows are whole bytes");
   for (int y = area.y; y < area.y + area.height; ++y) {
     const int ty = (y - area.y) % bookshelf::WALLPAPER_TILE_H;
     const uint8_t* row = bookshelf::WALLPAPER_TILE + ty * rowBytes;
-    for (int x = area.x; x < area.x + area.width; ++x) {
-      const int tx = (x - area.x) % bookshelf::WALLPAPER_TILE_W;
-      if ((row[tx >> 3] & (0x80 >> (tx & 7))) != 0) renderer.drawPixel(x, y, true);
+    // The damask is mostly blank: whole empty bytes of the tile are skipped.
+    for (int x = area.x, tx = 0; x < area.x + area.width; x += 8, tx = (tx + 8) % bookshelf::WALLPAPER_TILE_W) {
+      const uint8_t bits = row[tx >> 3];
+      if (bits == 0) continue;
+      for (int bit = 0; bit < 8 && x + bit < area.x + area.width; ++bit) {
+        if ((bits & (0x80 >> bit)) != 0) renderer.drawPixel(x + bit, y, true);
+      }
     }
   }
 }
