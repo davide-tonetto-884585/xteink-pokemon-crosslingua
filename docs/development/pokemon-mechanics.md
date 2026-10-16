@@ -66,6 +66,12 @@ Processes **one minute at a time** (never batched) so every random event lands o
 - Mew (151): only appears once all other 150 species have been caught.
 - Gender is randomized according to the species' real `genderRate`.
 
+**Trainers met while reading** (`lib/Pokemon/PokemonTrainers.*`, queued by `PokemonService::maybeQueueTrainer()`)
+- Each time `lifetimeMinutes` crosses a multiple of `TRAINER_CHECK_MINUTES = 30`, a trainer is queued at **3/4** odds (drawn in the service, after `applyCreditedMinutes()`, like shininess - the pure function's scripted-draw tests stay untouched; a draw of 0 never queues one). At most `MAX_PENDING_TRAINERS = 2` wait in the queue.
+- The event (`PendingEventKind::Trainer`) stores the class (12 Gen 1 route classes) in `speciesId`, the level in `level` and a team seed in `recordId`; `buildTrainerTeam()` rebuilds the 1-3 Pokémon team from them (1 below Lv 10, 1-2 below 20, 2-3 from there; evolved species only from their evolution level, 30 for stone/trade ones; level-up movesets).
+- Level: `trainerLevelFor(bookProgressPercent, partyAverageLevel)` - a window from party average - 4 to + 2, the book's % picking the position in it.
+- The battle reuses the gym flow (`gymChallengeIndex_ = ROAD_TRAINER_INDEX` in `PokemonActivity`): no catching or running, trainer IVs, ×6 XP, AI skill 1, no healing charges. Win, loss, Pass or forfeit all pop the event (`resolveTrainer()`); a win leaves a Potion/Super/Hyper Potion half of the time.
+
 **Rare items**
 - Rolled every hour at 1/20 odds, with pity after 19 misses.
 - Prioritizes whichever item type the Party currently needs to evolve.

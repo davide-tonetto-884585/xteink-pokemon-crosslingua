@@ -153,6 +153,9 @@ DashboardNotice noticeForEvent(const PendingEvent* event) {
       // Reuses the same notice as Evolution for now; a dedicated icon is a
       // Stage 7 (UI) concern, not a storage-layer one.
       return DashboardNotice::WhatsThis;
+    case PendingEventKind::Trainer:
+      // Same "!" as a wild Pokemon: someone wants to battle.
+      return DashboardNotice::NewPokemon;
     case PendingEventKind::None:
       return DashboardNotice::None;
   }

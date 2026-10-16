@@ -69,7 +69,8 @@ artwork archive (`xteink-pokemon-sd-card-assets.zip`) contains only the
 - [ ] The canonical local artwork directory contains every required BMP with
       the documented dimensions: the one-bit art (614 species/item/Pokédex art
       + 151 back sprites + 77 bag item icons + 8 badge icons + 13 trainer
-      portraits) and the 151 four-bit sleep portraits.
+      portraits + 12 trainer class portraits) and the 151 four-bit sleep
+      portraits.
 - [ ] The native artwork-generator/packager tests pass (`ctest -R
       PokemonArtPack`), confirming the pack against `RIGHTS_AND_ATTRIBUTION.md`
       and the manifest/checksum rules `scripts/package_pokemon_v2_release.py`

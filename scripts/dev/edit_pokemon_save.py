@@ -7,7 +7,7 @@ set up scenarios (queue a wild encounter, wipe HP/PP/status back to full,
 clear gym progress, hand a Pokemon some items) without waiting on real
 gameplay/RNG. See docs/file-formats.md for the on-disk layout this assumes;
 this tool only understands the CURRENT save format used by this branch
-(main save version 10, 341-byte state; battle-store version 3, 21-byte
+(main save version 10/11, 341-byte state; battle-store version 3, 21-byte
 entries) and refuses to touch anything else rather than risk corrupting an
 unfamiliar layout.
 
@@ -56,7 +56,8 @@ OFF_HEADER_PAYLOAD_BYTES = 20  # u32: stateBytes + recordCount * RECORD_BYTES - 
 STATE_BYTES_V7 = 210
 STATE_BYTES_V8 = 280  # v8 appends the pending-event slots past the original 3 (7 x 10 bytes)
 STATE_BYTES_V9 = 340  # v9 appends 6 more pending-event slots (10-15) after v8's own fixed region
-STATE_BYTES_V10 = 341  # v10 appends starterSpeciesId (1 byte) after v9's layout
+STATE_BYTES_V10 = 341  # v10 appends starterSpeciesId (1 byte) after v9's layout; v11 keeps it (adds Trainer events)
+SNAPSHOT_VERSION = 11
 RECORD_BYTES = 48
 POKEMON_NICKNAME_BYTES = 33  # record bytes 14..46; byte 47 is reserved (must be 0)
 PENDING_EVENT_BYTES = 10
@@ -132,12 +133,14 @@ PENDING_KIND_ENCOUNTER = 1
 PENDING_KIND_ITEM = 2
 PENDING_KIND_EVOLUTION = 3
 PENDING_KIND_MOVE_LEARN = 4
+PENDING_KIND_TRAINER = 5  # save version 11+: speciesId = trainer class, level, recordId = team seed
 PENDING_KIND_NAMES = {
     PENDING_KIND_NONE: "None",
     PENDING_KIND_ENCOUNTER: "Encounter",
     PENDING_KIND_ITEM: "Item",
     PENDING_KIND_EVOLUTION: "Evolution",
     PENDING_KIND_MOVE_LEARN: "MoveLearn",
+    PENDING_KIND_TRAINER: "Trainer",
 }
 
 ORIGIN_UNKNOWN = 0
@@ -393,7 +396,7 @@ def load_save(path: Path) -> SaveFile:
         # only rewritten when a command actually writes.
         extra = STATE_BYTES_V10 - state_size
         data[HEADER_BYTES + state_size : HEADER_BYTES + state_size] = bytes(extra)
-        struct.pack_into("<H", data, 4, 10)
+        struct.pack_into("<H", data, 4, SNAPSHOT_VERSION)
         struct.pack_into("<H", data, 12, STATE_BYTES_V10)
         payload, = struct.unpack_from("<I", data, 20)
         struct.pack_into("<I", data, 20, payload + extra)
@@ -402,7 +405,7 @@ def load_save(path: Path) -> SaveFile:
         recompute_crc(save)
     if state_size != STATE_BYTES_V10:
         raise ToolError(
-            f"{path}: this tool only understands version-7/8/9/10 saves (210/280/340/341-byte state), got "
+            f"{path}: this tool only understands version-7/8/9/10/11 saves (210/280/340/341-byte state), got "
             f"{state_size} bytes (version {version}) - refusing to touch an unfamiliar layout. A version-6 "
             f"save (205 bytes) is upgraded the next time the game writes it - run the game once first."
         )
@@ -755,7 +758,7 @@ def cmd_dump(args: argparse.Namespace) -> None:
             print(f"  slot {slot}: empty")
             continue
         species = species_map.get(species_id)
-        species_name = species.name if species else f"?{species_id}"
+        species_name = (TRAINER_CLASS_NAMES[species_id - 1] if kind == PENDING_KIND_TRAINER and 1 <= species_id <= len(TRAINER_CLASS_NAMES) else species.name if species else f"?{species_id}")
         shiny_suffix = " [SHINY]" if is_shiny else ""
         print(
             f"  slot {slot}: {PENDING_KIND_NAMES.get(kind, kind)} - recordId={record_id}, species={species_name}{shiny_suffix}, "
@@ -888,6 +891,49 @@ def cmd_queue_encounter(args: argparse.Namespace) -> None:
     print(
         f"queued slot {slot}: wild {species.name}{shiny_suffix} (species {species.id}), level {args.level}, "
         f"gender {GENDER_NAMES[gender]}"
+    )
+    if not args.dry_run:
+        write_saves(saves, backup=not args.no_backup)
+
+
+TRAINER_CLASS_NAMES = [
+    "youngster", "bug-catcher", "lass", "hiker", "swimmer", "super-nerd",
+    "bird-keeper", "psychic", "channeler", "blackbelt", "fisherman", "beauty",
+]  # index + 1 = TrainerClass (lib/Pokemon/PokemonTrainers.h)
+
+
+def cmd_queue_trainer(args: argparse.Namespace) -> None:
+    query = args.trainer_class.lower()
+    if query.isdigit():
+        class_id = int(query)
+    elif query in TRAINER_CLASS_NAMES:
+        class_id = TRAINER_CLASS_NAMES.index(query) + 1
+    else:
+        raise ToolError(f"--class must be 1-{len(TRAINER_CLASS_NAMES)} or one of: {', '.join(TRAINER_CLASS_NAMES)}")
+    if not (1 <= class_id <= len(TRAINER_CLASS_NAMES)):
+        raise ToolError(f"--class must be 1-{len(TRAINER_CLASS_NAMES)}")
+    if not (1 <= args.level <= 100):
+        raise ToolError("--level must be 1-100")
+    if not (0 <= args.seed <= 0xFFFFFFFF):
+        raise ToolError("--seed must fit in 32 bits")
+
+    saves = load_saves(args.save_dir)
+    active = max(saves, key=lambda s: s.sequence)
+    slot = args.slot if args.slot is not None else first_empty_pending_slot(active)
+    if slot is None:
+        raise ToolError("every pending-event slot is already in use - pass --slot to overwrite one explicitly")
+    if not (0 <= slot < PENDING_EVENT_COUNT):
+        raise ToolError(f"--slot must be 0-{PENDING_EVENT_COUNT - 1}")
+
+    for save in saves:
+        # A Trainer event is only valid from save version 11; a v10 header would
+        # let an older build misread it, so mark the file as v11.
+        struct.pack_into("<H", save.data, 4, SNAPSHOT_VERSION)
+        write_pending_event(save, slot, args.seed, class_id, args.level, GENDER_UNKNOWN, 0, PENDING_KIND_TRAINER)
+        recompute_crc(save)
+    print(
+        f"queued slot {slot}: trainer {TRAINER_CLASS_NAMES[class_id - 1]} (class {class_id}), "
+        f"level {args.level}, team seed {args.seed}"
     )
     if not args.dry_run:
         write_saves(saves, backup=not args.no_backup)
@@ -1209,6 +1255,13 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--slot", type=int, help="pending-event slot 0-2 (default: first empty slot)")
     queue.add_argument("--shiny", action="store_true", help="mark this encounter shiny (RecordFlag::Shiny on catch)")
     queue.set_defaults(func=cmd_queue_encounter)
+
+    trainer = subparsers.add_parser("queue-trainer", help="queue a trainer met while reading, to test the trainer battle")
+    trainer.add_argument("--class", dest="trainer_class", required=True, help="class id 1-12 or name, e.g. youngster")
+    trainer.add_argument("--level", type=int, required=True, help="1-100")
+    trainer.add_argument("--seed", type=int, default=1, help="team seed (recordId), default 1")
+    trainer.add_argument("--slot", type=int, help="pending-event slot (default: first empty slot)")
+    trainer.set_defaults(func=cmd_queue_trainer)
 
     bag = subparsers.add_parser("set-bag-item", help="set an item's bag count directly (evolution stone or bag item)")
     bag.add_argument("--item", required=True, help="item id or name, e.g. 7 or poke-ball")

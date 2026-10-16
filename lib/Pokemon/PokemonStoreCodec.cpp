@@ -68,7 +68,7 @@ size_t snapshotStateBytes(const uint16_t version) {
   if (version == POKEMON_SNAPSHOT_VERSION_V7) return POKEMON_STATE_V7_BYTES;
   if (version == POKEMON_SNAPSHOT_VERSION_V8) return POKEMON_STATE_V8_BYTES;
   if (version == POKEMON_SNAPSHOT_VERSION_V9) return POKEMON_STATE_V9_BYTES;
-  if (version == POKEMON_SNAPSHOT_VERSION) return POKEMON_STATE_BYTES;
+  if (version == POKEMON_SNAPSHOT_VERSION_V10 || version == POKEMON_SNAPSHOT_VERSION) return POKEMON_STATE_BYTES;
   return 0;
 }
 
@@ -237,7 +237,7 @@ bool decodeState(const uint8_t* bytes, const size_t size, const uint16_t version
             bytes + POKEMON_STATE_V8_BYTES + (index - PENDING_EVENT_V8_CAPACITY) * PENDING_EVENT_BYTES);
       }
     }
-    if (version >= POKEMON_SNAPSHOT_VERSION) {
+    if (version >= POKEMON_SNAPSHOT_VERSION_V10) {
       candidate.starterSpeciesId = bytes[POKEMON_STATE_V9_BYTES];
     }
   }

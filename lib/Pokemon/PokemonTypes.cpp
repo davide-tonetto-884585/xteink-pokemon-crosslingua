@@ -120,6 +120,9 @@ bool validatePendingEvent(const PendingEvent& event) {
       return event.recordId != 0 && event.speciesId >= 1 && event.speciesId <= POKEMON_MOVE_ID_MAX &&
              event.level >= 1 && event.level <= 100 && event.gender == Gender::Unknown &&
              event.item == EvolutionItem::None;
+    case PendingEventKind::Trainer:
+      return event.speciesId >= 1 && event.speciesId <= TRAINER_CLASS_COUNT && event.level >= 1 && event.level <= 100 &&
+             event.gender == Gender::Unknown && event.item == EvolutionItem::None && !event.isShiny;
   }
   return false;
 }

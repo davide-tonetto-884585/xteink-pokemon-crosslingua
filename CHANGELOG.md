@@ -1,3 +1,15 @@
+## [1.14.0] - 2026-10-17
+
+### Added
+
+- **Trainers while reading**: as on the routes of the original games, trainers now show up while you read - every 30 minutes of reading there is a good chance of one (about one every 40 minutes), and up to two wait in the Pokémon menu like wild Pokémon. Twelve classic classes (Youngster, Bug Catcher, Hiker, Swimmer, Fisherman…) with a team of one to three Pokémon of their style. Their level follows your Party (from 4 levels below its average to 2 above), lower at the start of the book and higher towards its end. Fight them for trainer experience - half of them also leave a Potion, Super Potion or Hyper Potion behind - or let them pass; losing costs nothing.
+- The **Coming Up** box of the Pokémon menu has a new **Fight** row: the reading minutes toward the next chance of meeting a trainer (out of 30).
+- Each trainer class has its own portrait from the original Red/Blue games on the "wants to battle!" screen. It needs the updated SD-card art pack (`pokemon/trainers/classes/`); with an older pack the screen shows the trainer's first Pokémon instead.
+
+### Changed
+
+- The save format moves to version 11 (no data changes) so that an older firmware refuses a save with a waiting trainer instead of mistaking it for a damaged one. Going back to an older firmware after updating is not supported.
+
 ## [1.13.4] - 2026-10-11
 
 ### Changed

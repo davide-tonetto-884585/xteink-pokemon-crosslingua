@@ -4,6 +4,7 @@
 
 #include <Logging.h>
 #include <PokemonSpecies.h>
+#include <PokemonTrainers.h>
 
 #include <algorithm>
 #include <limits>
@@ -365,6 +366,69 @@ ServiceStatus PokemonService::resolveEncounter(const EncounterChoice choice, uin
     } else {
       ensureIvEv(caughtRecordId);
     }
+  }
+  return ServiceStatus::Ok;
+}
+
+void PokemonService::maybeQueueTrainer(PokemonState& state, const PokemonRecord& leader,
+                                       const uint32_t lifetimeMinutesBefore, const uint8_t bookProgressPercent) {
+  // Drawn here with this service's own random_, like shininess, so the
+  // scripted draw sequences of applyCreditedMinutes()'s tests stay intact.
+  if (random_.below == nullptr ||
+      state.lifetimeMinutes / TRAINER_CHECK_MINUTES == lifetimeMinutesBefore / TRAINER_CHECK_MINUTES) {
+    return;
+  }
+  const size_t pending = pendingEventCount(state);
+  size_t trainers = 0;
+  for (size_t i = 0; i < pending; ++i) trainers += state.pendingEvents[i].kind == PendingEventKind::Trainer ? 1 : 0;
+  if (pending >= PENDING_EVENT_CAPACITY || trainers >= MAX_PENDING_TRAINERS) return;
+  // The trainer shows up on a draw of 1..NUMERATOR (a draw of 0 never), so a
+  // random source that always returns 0 never queues one.
+  const uint32_t roll = random_.below(random_.context, TRAINER_CHANCE_DENOMINATOR);
+  if (roll == 0 || roll > TRAINER_CHANCE_NUMERATOR) return;
+
+  uint32_t levelSum = 0;
+  uint32_t members = 0;
+  for (const uint32_t recordId : state.partyRecordIds) {
+    if (recordId == 0) continue;
+    PokemonRecord record = leader;
+    if (recordId != leader.recordId && !store_.readRecord(recordId, record)) continue;
+    levelSum += levelXpProgress(record.totalXp).level;
+    ++members;
+  }
+  if (members == 0) return;
+  const auto averageLevel = static_cast<uint8_t>((levelSum + members / 2) / members);
+
+  PendingEvent trainer{};
+  trainer.kind = PendingEventKind::Trainer;
+  trainer.speciesId = static_cast<uint16_t>(1 + random_.below(random_.context, TRAINER_CLASS_COUNT));
+  trainer.level = trainerLevelFor(bookProgressPercent, averageLevel);
+  trainer.recordId = (random_.below(random_.context, 0x10000U) << 16) | random_.below(random_.context, 0x10000U);
+  if (enqueuePendingEvent(state, trainer)) syncDashboardNotice(state);
+}
+
+ServiceStatus PokemonService::resolveTrainer(const bool won, uint8_t& rewardItemId) {
+  rewardItemId = 0;
+  PokemonState state{};
+  const ServiceStatus stateStatus = loadReadyState(state);
+  if (stateStatus != ServiceStatus::Ok) return stateStatus;
+  const PendingEvent* front = pendingEventFront(state);
+  if (front == nullptr || front->kind != PendingEventKind::Trainer) return ServiceStatus::NotApplicable;
+  const uint8_t level = front->level;
+  if (!discardFrontPendingEvent(state)) return ServiceStatus::NotApplicable;
+  // Half of the beaten trainers leave a healing item behind.
+  if (won && random_.below != nullptr && random_.below(random_.context, 2) == 1) {
+    const uint8_t itemId = trainerRewardItemFor(level);
+    uint8_t& count = state.bagCounts[itemId - EVOLUTION_ITEM_COUNT - 1U];
+    if (count < std::numeric_limits<uint8_t>::max()) {
+      ++count;
+      rewardItemId = itemId;
+    }
+  }
+  if (!store_.commit(state)) {
+    LOG_ERR("PokemonService", "Failed to resolve trainer");
+    rewardItemId = 0;
+    return ServiceStatus::StorageError;
   }
   return ServiceStatus::Ok;
 }
@@ -1536,6 +1600,7 @@ bool PokemonService::creditMinutes(const uint16_t minutes, const uint8_t bookPro
   const uint32_t originalLeaderXp = leader.totalXp;
   const size_t pendingBefore = pendingEventCount(state);
   const uint8_t previousMinuteRemainder = state.readingMinuteRemainder;
+  const uint32_t lifetimeMinutesBefore = state.lifetimeMinutes;
   const CreditResult result =
       applyCreditedMinutes(state, leader, minutes, bookProgressPercent, ownedEvolutionNeeds, random_);
   if (result.status != CreditStatus::Applied) return false;
@@ -1559,6 +1624,8 @@ bool PokemonService::creditMinutes(const uint16_t minutes, const uint8_t bookPro
       }
     }
   }
+
+  maybeQueueTrainer(state, leader, lifetimeMinutesBefore, bookProgressPercent);
 
   RecordMutation mutation{};
   if (leader.totalXp != originalLeaderXp) {

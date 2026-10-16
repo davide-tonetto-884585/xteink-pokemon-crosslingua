@@ -303,6 +303,24 @@ void pendingEventValidationFollowsItsTag() {
 
   state.pendingEvents[0].level = 16;
   CHECK(!pokemon::validateState(state));
+
+  // Trainer: class in speciesId, level, any seed in recordId.
+  state = validState();
+  state.pendingEvents[0].kind = PendingEventKind::Trainer;
+  state.pendingEvents[0].recordId = 0xFFFFFFFFU;
+  state.pendingEvents[0].speciesId = pokemon::TRAINER_CLASS_COUNT;
+  state.pendingEvents[0].level = 37;
+  CHECK(pokemon::validateState(state));
+  state.pendingEvents[0].speciesId = pokemon::TRAINER_CLASS_COUNT + 1;
+  CHECK(!pokemon::validateState(state));
+  state.pendingEvents[0].speciesId = 0;
+  CHECK(!pokemon::validateState(state));
+  state.pendingEvents[0].speciesId = 1;
+  state.pendingEvents[0].level = 0;
+  CHECK(!pokemon::validateState(state));
+  state.pendingEvents[0].level = 37;
+  state.pendingEvents[0].gender = Gender::Male;
+  CHECK(!pokemon::validateState(state));
 }
 
 void pendingEventQueueIsFixedFifoAndCompacted() {

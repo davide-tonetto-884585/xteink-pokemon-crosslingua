@@ -136,6 +136,11 @@ class PokemonService {
   ServiceStatus resolveEncounter(EncounterChoice choice, uint32_t& caughtRecordId,
                                  const std::array<uint8_t, STAT_COUNT>* battleIvs = nullptr);
   ServiceStatus acknowledgeItem();
+  // Ends the front Trainer event (PendingEventKind::Trainer) after its
+  // battle, or when the player declines it. A won battle may leave a healing
+  // item behind (trainerRewardItemFor()), added to the bag in the same write;
+  // `rewardItemId` is that item, or 0.
+  ServiceStatus resolveTrainer(bool won, uint8_t& rewardItemId);
   ServiceStatus resolveEvolution(EvolutionChoice choice);
   // Resolves the front MoveLearn event (PendingEventKind::MoveLearn):
   // replaceSlot in [0, BATTLE_MOVE_SLOTS) teaches the move into that slot,
@@ -385,6 +390,12 @@ class PokemonService {
   // touching the bag without duplicating all of that branching.
   UseConsumableOutcome useConsumableImpl(uint32_t recordId, uint8_t itemId, bool dryRun, ConsumableUse use);
   void healPartyOnRead(const PokemonState& state, uint16_t minutes, uint8_t previousMinuteRemainder);
+  // Every TRAINER_CHECK_MINUTES of reading (lifetime minutes, so short
+  // sessions add up) a trainer may be queued, levelled by the book's progress
+  // and the party's average level (trainerLevelFor()). `leader` is the
+  // in-memory leader, possibly just levelled up by this credit.
+  void maybeQueueTrainer(PokemonState& state, const PokemonRecord& leader, uint32_t lifetimeMinutesBefore,
+                         uint8_t bookProgressPercent);
   // Checks the leader's learnset for any move newly available between
   // previousLevel (exclusive) and currentLevel (inclusive): auto-fills an
   // empty move slot if there's room, or queues a MoveLearn event for the UI
