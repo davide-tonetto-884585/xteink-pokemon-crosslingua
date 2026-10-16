@@ -91,6 +91,20 @@ boosts and drops, multi-hit moves, and two-turn moves like Fly or Solar Beam all
 A Pokémon that faints needs a Revive (or a trip back to full health) before it can fight
 again.
 
+## Trainers on the road
+
+While you read, trainers also cross your path, as on the routes of the original games:
+every 30 minutes of reading there's a good chance one shows up (about one every 40 minutes),
+and up to two wait for you in the Pokémon menu, like wild Pokémon do. Each is a Youngster,
+a Bug Catcher, a Hiker, a Swimmer… with a team of one to three Pokémon of their style.
+
+Their level follows your team: it stays between 4 levels below and 2 above your Party's
+average level, lower at the start of the book you're reading and higher towards its end.
+Choose **Fight** to battle them (you can't catch a trainer's Pokémon or run, as with Gym
+Leaders) or **Pass** to let them go. Beating them gives trainer experience, more than a
+wild Pokémon, and half the time they leave a Potion, Super Potion or Hyper Potion behind.
+Losing costs nothing: the trainer just walks away.
+
 ## Gym Leaders, the Elite Four, and the Champion
 
 Once your team feels ready, take on the eight Gym Leaders from the Pokémon menu's Gym

@@ -48,6 +48,13 @@ A `PendingEventKind` value of `4` (`MoveLearn`) was added; it reuses the
 existing 10-byte pending-event layout unchanged — species ID holds the move
 ID being learned (1-165) and level holds the level it was learned at.
 
+A `PendingEventKind` value of `5` (`Trainer`, a trainer met while reading)
+was added in version 11, with the same layout: species ID holds the trainer
+class (1-12), level its level and record ID the seed its team is rebuilt from.
+Version 11 changes no byte of the layout; the version moves only so that an
+older build refuses the save (unsupported) instead of rejecting the unknown
+kind as corruption and falling back to the other save slot.
+
 A file's live battle state (which 4 moves a Party member currently knows,
 each move's remaining PP, current HP, and any status ailment) is **not**
 stored here. It lives in the separate `/.crosspoint/pokemon-battle-{a,b}.bin`
@@ -89,7 +96,7 @@ written. The file is:
 | 4 | 2 | Format version (`1` through `7`; a build always writes the newest it knows) |
 | 6 | 2 | Header size (`24`) |
 | 8 | 4 | Non-zero snapshot sequence |
-| 12 | 2 | State size (`116` for version 2 up to `341` for version 10 — see the version table below) |
+| 12 | 2 | State size (`116` for version 2 up to `341` for versions 10 and 11 — see the version table below) |
 | 14 | 2 | Record size (`48`) |
 | 16 | 4 | Record count |
 | 20 | 4 | Payload size (`116 + recordCount * 48`) |
@@ -134,6 +141,7 @@ size) and treats the fields a file predates as zero; it always writes the newest
 | 8 | 280 | 210-279: pending-event slots 4-10 (`10` bytes each, same compacted queue as the first three) |
 | 9 | 340 | 280-339: pending-event slots 11-16 (`10` bytes each, same compacted queue) |
 | 10 | 341 | 340: starter species id (`u8`, 0 = not recorded; set at starter creation, picks the Champion's counter Pokémon) |
+| 11 | 341 | Nothing appended: pending events may now be `Trainer` (kind 5) |
 
 ### Legacy version 1
 
