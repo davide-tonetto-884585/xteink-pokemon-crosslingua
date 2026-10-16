@@ -4317,16 +4317,22 @@ void PokemonActivity::renderFocused() {
     snprintf(line, sizeof(line), tr(STR_POKEMON_FOUND_ITEM), itemName(pending.item));
     centered(renderer, UI_12_FONT_ID, contentTop + 112, line, EpdFontFamily::BOLD);
   } else if (pending.kind == pokemon::PendingEventKind::Trainer) {
-    // The Pokemon it will send out first, then who wants to battle.
+    // The trainer's portrait (the Pokemon it sends out first when the art
+    // pack predates the class portraits), then who wants to battle.
     pokemon::TrainerTeam team;
     if (!pokemon::buildTrainerTeam(pending.speciesId, pending.level, pending.recordId, team)) return;
-    pokemon::drawPokemonSpeciesArt(renderer, team.members[0].speciesId, true,
-                                   Rect{(renderer.getScreenWidth() - 120) / 2, contentTop + 8, 120, 90});
-    snprintf(line, sizeof(line), tr(STR_POKEMON_TRAINER_WANTS_TO_BATTLE),
-             trainerClassName(static_cast<uint8_t>(pending.speciesId)));
-    centered(renderer, UI_12_FONT_ID, contentTop + 112, line, EpdFontFamily::BOLD);
+    constexpr int portraitSize = 112;
+    const uint8_t classId = static_cast<uint8_t>(pending.speciesId);
+    if (!pokemon::drawPokemonTrainerClassArt(
+            renderer, classId,
+            Rect{(renderer.getScreenWidth() - portraitSize) / 2, contentTop + 4, portraitSize, portraitSize}, false)) {
+      pokemon::drawPokemonSpeciesArt(renderer, team.members[0].speciesId, true,
+                                     Rect{(renderer.getScreenWidth() - 120) / 2, contentTop + 15, 120, 90});
+    }
+    snprintf(line, sizeof(line), tr(STR_POKEMON_TRAINER_WANTS_TO_BATTLE), trainerClassName(classId));
+    centered(renderer, UI_12_FONT_ID, contentTop + 132, line, EpdFontFamily::BOLD);
     snprintf(line, sizeof(line), tr(STR_POKEMON_TRAINER_TEAM_INFO), pending.level, static_cast<unsigned>(team.count));
-    centered(renderer, UI_10_FONT_ID, contentTop + 148, line);
+    centered(renderer, UI_10_FONT_ID, contentTop + 168, line);
   } else if (pending.kind == pokemon::PendingEventKind::Evolution) {
     pokemon::PokemonRecord record{};
     if (service_.readRecord(pending.recordId, record) != pokemon::ServiceStatus::Ok) return;
