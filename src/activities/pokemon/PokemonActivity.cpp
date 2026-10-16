@@ -4458,7 +4458,9 @@ void PokemonActivity::renderMenuGrid() {
 // ballMisses/medicineMisses/machineMisses/itemMisses - and their public
 // thresholds (PokemonGame.h), so a player can see how close they are to a
 // guaranteed wild encounter/Ball/Medicine/TM-HM/evolution-stone drop instead
-// of that progress being invisible engine-only state.
+// of that progress being invisible engine-only state. The Fight row is the
+// reading time toward the next chance of meeting a trainer (a chance, not a
+// guarantee - see TRAINER_CHECK_MINUTES).
 void PokemonActivity::renderMenuPityBars() {
   if (snapshot_.partyCount == 0) return;
 
@@ -4467,8 +4469,11 @@ void PokemonActivity::renderMenuPityBars() {
     uint8_t misses;
     uint8_t threshold;
   };
-  const std::array<PityRow, 5> rows{{
+  const std::array<PityRow, 6> rows{{
       {tr(STR_POKEMON_ENCOUNTER), snapshot_.state.encounterMisses, pokemon::ENCOUNTER_MISSES_BEFORE_GUARANTEE},
+      {tr(STR_POKEMON_FIGHT),
+       static_cast<uint8_t>(snapshot_.state.lifetimeMinutes % pokemon::TRAINER_CHECK_MINUTES),
+       static_cast<uint8_t>(pokemon::TRAINER_CHECK_MINUTES)},
       {tr(STR_POKEMON_BAG_BALLS), snapshot_.state.ballMisses, pokemon::BALL_MISSES_BEFORE_GUARANTEE},
       {tr(STR_POKEMON_BAG_MEDICINE), snapshot_.state.medicineMisses, pokemon::ITEM_TRACK_MISSES_BEFORE_GUARANTEE},
       {tr(STR_POKEMON_BAG_MACHINES), snapshot_.state.machineMisses, pokemon::ITEM_TRACK_MISSES_BEFORE_GUARANTEE},
