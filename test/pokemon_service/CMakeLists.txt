@@ -106,6 +106,7 @@ add_executable(PokemonServiceTest
   ${REPO_ROOT}/lib/Pokemon/PokemonLearnsets.cpp
   ${REPO_ROOT}/lib/Pokemon/PokemonItemData.cpp
   ${REPO_ROOT}/lib/Pokemon/PokemonGymData.cpp
+  ${REPO_ROOT}/lib/Pokemon/PokemonTrainers.cpp
   ${REPO_ROOT}/lib/Pokemon/PokemonTypeChart.cpp
   ${REPO_ROOT}/lib/Pokemon/PokemonBattle.cpp
   ${REPO_ROOT}/lib/Pokemon/PokemonBattleStoreCodec.cpp

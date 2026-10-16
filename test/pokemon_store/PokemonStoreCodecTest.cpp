@@ -167,6 +167,27 @@ void v9StateDecodesWithStarterNotRecorded() {
   CHECK(decoded.starterSpeciesId == 0);  // "not recorded" - releaseRecord() backfills it
 }
 
+void v10StateDecodesUnchangedAndV11CarriesTrainerEvents() {
+  pokemon::PokemonState state{};
+  state.partyRecordIds[0] = 3;
+  state.starterSpeciesId = 4;
+  state.pendingEvents[0].kind = pokemon::PendingEventKind::Trainer;
+  state.pendingEvents[0].recordId = 0xA5A51234U;
+  state.pendingEvents[0].speciesId = 7;
+  state.pendingEvents[0].level = 42;
+  pokemon::StateBytes bytes{};
+  CHECK(pokemon::encodeState(state, bytes));
+  CHECK(bytes[24 + 9] == static_cast<uint8_t>(pokemon::PendingEventKind::Trainer));
+  // v11 keeps v10's layout: same size, same bytes.
+  CHECK(pokemon::snapshotStateBytes(pokemon::POKEMON_SNAPSHOT_VERSION_V10) == pokemon::POKEMON_STATE_BYTES);
+  pokemon::PokemonState decoded{};
+  CHECK(pokemon::decodeState(bytes.data(), bytes.size(), pokemon::POKEMON_SNAPSHOT_VERSION, decoded));
+  CHECK(decoded == state);
+  pokemon::PokemonState fromV10{};
+  CHECK(pokemon::decodeState(bytes.data(), bytes.size(), pokemon::POKEMON_SNAPSHOT_VERSION_V10, fromV10));
+  CHECK(fromV10.starterSpeciesId == 4);
+}
+
 void starterSpeciesBeyondKantoIsRejected() {
   pokemon::PokemonState state{};
   state.partyRecordIds[0] = 1;
@@ -490,6 +511,7 @@ int main() {
   v6StateDecodesWithZeroedVitaminCounts();
   v7StateDecodesWithEmptyExtraPendingSlots();
   v9StateDecodesWithStarterNotRecorded();
+  v10StateDecodesUnchangedAndV11CarriesTrainerEvents();
   starterSpeciesBeyondKantoIsRejected();
   v8StateDecodesWithEmptyExtraPendingSlots();
   v2StateDecodesWithZeroedBagAndBattleProgress();

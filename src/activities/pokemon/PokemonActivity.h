@@ -5,6 +5,7 @@
 #include <FreeInkApp.h>
 #include <FreeInkUIGfxRenderer.h>
 #include <PokemonPromptContext.h>
+#include <PokemonTrainers.h>
 #include <PokemonUiLayout.h>
 
 #include <array>
@@ -139,6 +140,16 @@ class PokemonActivity final : public Activity {
                            bool preserveSideEffects = false);
   bool enterBattle(const pokemon::PendingEvent& pending);
   bool enterGymBattle(uint8_t gymIndex);
+  // A trainer met while reading (PendingEventKind::Trainer): the same
+  // multi-Pokemon battle as a gym, with the team rebuilt from the event
+  // (buildTrainerTeam()) and gymChallengeIndex_ = ROAD_TRAINER_INDEX.
+  bool enterTrainerBattle(const pokemon::PendingEvent& pending);
+  // The team and name of the trainer being fought (gym or road trainer).
+  std::span<const pokemon::GymTeamMember> challengeTeam() const;
+  const char* challengeTrainerName() const;
+  // End of a road-trainer battle (won, lost or forfeited): resolves the
+  // pending event, reports any item left behind and returns to the queue.
+  void finishTrainerBattle(bool won, bool playerAlsoFainted);
   // Sends out gym team member `member` (real team index `teamIndex`): builds
   // the combatant, sets the trainer AI's skill for this gym, and restores what
   // it had left if the trainer withdrew it earlier (gymBench_). preserveSideEffects
@@ -285,6 +296,12 @@ class PokemonActivity final : public Activity {
   pokemon::BattleCombatant battleOpponent_{};
   char battleLog_[160]{};
   uint8_t gymChallengeIndex_ = 0;         // 0 = not fighting a gym/Elite Four right now
+  // gymChallengeIndex_ while fighting a trainer met while reading; every
+  // "trainer battle" rule (no catching, no running, trainer IVs and XP)
+  // applies, with the team in roadTeam_.
+  static constexpr uint8_t ROAD_TRAINER_INDEX = 0xFF;
+  pokemon::TrainerTeam roadTeam_{};
+  uint8_t roadTrainerClass_ = 0;
   uint8_t gymChallengeTeamProgress_ = 0;  // index of the opponent team member currently out
   // gymTeamOrder_[i] is which real gymTeamFor(gymChallengeIndex_) index sits
   // at position i - identity-initialized (gymTeamOrder_[i] == i) whenever a

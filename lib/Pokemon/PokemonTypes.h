@@ -10,6 +10,8 @@ namespace pokemon {
 constexpr size_t POKEMON_RECORD_BYTES = 48;
 constexpr size_t POKEMON_NICKNAME_BYTES = 33;
 constexpr uint16_t KANTO_SPECIES_COUNT = 151;
+// Trainer classes met while reading - see TrainerClass in PokemonTrainers.h.
+constexpr uint8_t TRAINER_CLASS_COUNT = 12;
 constexpr uint32_t MAXIMUM_TOTAL_XP = 8340;
 constexpr size_t POKEDEX_BYTES = 19;
 constexpr size_t PARTY_SIZE = 6;
@@ -92,6 +94,12 @@ enum class PendingEventKind : uint8_t {
   // moveId being learned (1..POKEMON_MOVE_ID_MAX) and `level` holds the
   // level it was learned at. No size change to PendingEvent/PokemonState.
   MoveLearn = 4,
+  // A trainer met while reading (see PokemonTrainers.h), same 10-byte
+  // layout: `speciesId` holds its TrainerClass (1..TRAINER_CLASS_COUNT),
+  // `level` its level and `recordId` the seed its team is rebuilt from.
+  // Added in save version 11, so an older build refuses the save instead of
+  // treating the unknown kind as corruption.
+  Trainer = 5,
 };
 
 enum class DashboardNotice : uint8_t {

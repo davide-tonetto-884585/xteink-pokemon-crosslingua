@@ -7,7 +7,7 @@ set up scenarios (queue a wild encounter, wipe HP/PP/status back to full,
 clear gym progress, hand a Pokemon some items) without waiting on real
 gameplay/RNG. See docs/file-formats.md for the on-disk layout this assumes;
 this tool only understands the CURRENT save format used by this branch
-(main save version 10, 341-byte state; battle-store version 3, 21-byte
+(main save version 10/11, 341-byte state; battle-store version 3, 21-byte
 entries) and refuses to touch anything else rather than risk corrupting an
 unfamiliar layout.
 
@@ -56,7 +56,8 @@ OFF_HEADER_PAYLOAD_BYTES = 20  # u32: stateBytes + recordCount * RECORD_BYTES - 
 STATE_BYTES_V7 = 210
 STATE_BYTES_V8 = 280  # v8 appends the pending-event slots past the original 3 (7 x 10 bytes)
 STATE_BYTES_V9 = 340  # v9 appends 6 more pending-event slots (10-15) after v8's own fixed region
-STATE_BYTES_V10 = 341  # v10 appends starterSpeciesId (1 byte) after v9's layout
+STATE_BYTES_V10 = 341  # v10 appends starterSpeciesId (1 byte) after v9's layout; v11 keeps it (adds Trainer events)
+SNAPSHOT_VERSION = 11
 RECORD_BYTES = 48
 POKEMON_NICKNAME_BYTES = 33  # record bytes 14..46; byte 47 is reserved (must be 0)
 PENDING_EVENT_BYTES = 10
@@ -132,12 +133,14 @@ PENDING_KIND_ENCOUNTER = 1
 PENDING_KIND_ITEM = 2
 PENDING_KIND_EVOLUTION = 3
 PENDING_KIND_MOVE_LEARN = 4
+PENDING_KIND_TRAINER = 5  # save version 11+: speciesId = trainer class, level, recordId = team seed
 PENDING_KIND_NAMES = {
     PENDING_KIND_NONE: "None",
     PENDING_KIND_ENCOUNTER: "Encounter",
     PENDING_KIND_ITEM: "Item",
     PENDING_KIND_EVOLUTION: "Evolution",
     PENDING_KIND_MOVE_LEARN: "MoveLearn",
+    PENDING_KIND_TRAINER: "Trainer",
 }
 
 ORIGIN_UNKNOWN = 0
@@ -393,7 +396,7 @@ def load_save(path: Path) -> SaveFile:
         # only rewritten when a command actually writes.
         extra = STATE_BYTES_V10 - state_size
         data[HEADER_BYTES + state_size : HEADER_BYTES + state_size] = bytes(extra)
-        struct.pack_into("<H", data, 4, 10)
+        struct.pack_into("<H", data, 4, SNAPSHOT_VERSION)
         struct.pack_into("<H", data, 12, STATE_BYTES_V10)
         payload, = struct.unpack_from("<I", data, 20)
         struct.pack_into("<I", data, 20, payload + extra)
@@ -402,7 +405,7 @@ def load_save(path: Path) -> SaveFile:
         recompute_crc(save)
     if state_size != STATE_BYTES_V10:
         raise ToolError(
-            f"{path}: this tool only understands version-7/8/9/10 saves (210/280/340/341-byte state), got "
+            f"{path}: this tool only understands version-7/8/9/10/11 saves (210/280/340/341-byte state), got "
             f"{state_size} bytes (version {version}) - refusing to touch an unfamiliar layout. A version-6 "
             f"save (205 bytes) is upgraded the next time the game writes it - run the game once first."
         )

@@ -17,7 +17,12 @@ constexpr uint16_t POKEMON_SNAPSHOT_VERSION_V6 = 6;
 constexpr uint16_t POKEMON_SNAPSHOT_VERSION_V7 = 7;
 constexpr uint16_t POKEMON_SNAPSHOT_VERSION_V8 = 8;
 constexpr uint16_t POKEMON_SNAPSHOT_VERSION_V9 = 9;
-constexpr uint16_t POKEMON_SNAPSHOT_VERSION = 10;
+constexpr uint16_t POKEMON_SNAPSHOT_VERSION_V10 = 10;
+// v11 keeps v10's layout byte for byte; it only allows PendingEventKind::Trainer
+// in the queue. The version moves so an older build, which would reject that
+// kind as corruption and fall back to (then overwrite) the other save slot,
+// refuses the newer save as Unsupported instead.
+constexpr uint16_t POKEMON_SNAPSHOT_VERSION = 11;
 constexpr size_t POKEMON_STATE_V1_BYTES = 96;
 constexpr size_t POKEMON_STATE_V2_BYTES = 116;
 // v3 appends bagCounts[POKEMON_BAG_SLOT_COUNT] and battleProgress (uint16_t)

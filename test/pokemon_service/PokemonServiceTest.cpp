@@ -1,4 +1,5 @@
 #include <HalStorage.h>
+#include <PokemonTrainers.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -6,6 +7,7 @@
 #include <set>
 #include <vector>
 
+#include "PokemonTrainers.h"
 #include "pokemon/PokemonMovesetStore.h"
 #include "pokemon/PokemonService.h"
 
@@ -14,6 +16,9 @@ namespace {
 uint32_t zeroRandom(void*, uint32_t) { return 0; }
 
 uint32_t itemEventRandom(void*, const uint32_t upperExclusive) { return upperExclusive == 5 ? 2U : 0U; }
+
+// 1 whenever possible: a trainer always shows up (and always leaves an item).
+uint32_t oneRandom(void*, const uint32_t upperExclusive) { return upperExclusive > 1 ? 1U : 0U; }
 
 pokemon::PokemonRecord starterPikachu() {
   pokemon::PokemonRecord record{};
@@ -3314,3 +3319,141 @@ TEST(PokemonService, PeekHallOfFameIsUnclearedBeforeAnyCapture) {
 }
 
 }  // namespace
+
+TEST(PokemonTrainers, LevelStaysInAWindowAroundThePartyAndFollowsTheBook) {
+  EXPECT_EQ(pokemon::trainerLevelFor(0, 30), 26U);
+  EXPECT_EQ(pokemon::trainerLevelFor(50, 30), 29U);
+  EXPECT_EQ(pokemon::trainerLevelFor(100, 30), 32U);
+  EXPECT_EQ(pokemon::trainerLevelFor(0, 3), 2U);
+  EXPECT_EQ(pokemon::trainerLevelFor(100, 100), 100U);
+  for (uint8_t progress = 0; progress <= 100; progress += 10) {
+    EXPECT_LE(pokemon::trainerLevelFor(progress, 40),
+              pokemon::trainerLevelFor(progress + 10 > 100 ? 100 : progress + 10, 40));
+  }
+}
+
+TEST(PokemonTrainers, TeamsAreDeterministicSizedByLevelAndRespectEvolutionLevels) {
+  for (uint16_t classId = 1; classId <= pokemon::TRAINER_CLASS_COUNT; ++classId) {
+    for (const uint8_t level : {2, 9, 15, 25, 45, 80, 100}) {
+      for (uint32_t seed = 0; seed < 40; ++seed) {
+        pokemon::TrainerTeam team;
+        ASSERT_TRUE(pokemon::buildTrainerTeam(classId, level, seed, team)) << classId << " " << int(level);
+        pokemon::TrainerTeam again;
+        ASSERT_TRUE(pokemon::buildTrainerTeam(classId, level, seed, again));
+        ASSERT_EQ(team.count, again.count);
+        EXPECT_GE(team.count, level >= 20 ? 2U : 1U);
+        EXPECT_LE(team.count, level < 10 ? 1U : (level < 20 ? 2U : 3U));
+        EXPECT_EQ(team.members[team.count - 1].level, level);
+        for (size_t i = 0; i < team.count; ++i) {
+          const pokemon::GymTeamMember& member = team.members[i];
+          EXPECT_EQ(member.speciesId, again.members[i].speciesId);
+          ASSERT_NE(pokemon::speciesData(member.speciesId), nullptr);
+          EXPECT_GE(member.level, 2U);
+          EXPECT_LE(member.level, level);
+          EXPECT_NE(member.moves[0], 0U) << "species " << member.speciesId << " has no move";
+          // A level-evolved species only from the level it evolves at.
+          if (pokemon::speciesData(member.speciesId)->stage != pokemon::EvolutionStage::Base) {
+            for (uint16_t from = 1; from <= pokemon::KANTO_SPECIES_COUNT; ++from) {
+              for (const pokemon::EvolutionRule& rule : pokemon::evolutionsFor(from)) {
+                if (rule.targetSpeciesId != member.speciesId) continue;
+                EXPECT_GE(member.level, rule.trigger == pokemon::EvolutionTrigger::Level ? rule.minimumLevel : 30U);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  pokemon::TrainerTeam team;
+  EXPECT_FALSE(pokemon::buildTrainerTeam(0, 10, 1, team));
+  EXPECT_FALSE(pokemon::buildTrainerTeam(pokemon::TRAINER_CLASS_COUNT + 1, 10, 1, team));
+  EXPECT_FALSE(pokemon::buildTrainerTeam(1, 0, 1, team));
+}
+
+TEST(PokemonService, ReadingQueuesATrainerEveryThirtyMinutesUpToTwo) {
+  Storage.clear();
+  pokemon::PokemonStore store;
+  pokemon::PokemonBattleStore battleStore;
+  pokemon::PokemonIvEvStore ivEvStore;
+  pokemon::PokemonHallOfFameStore hallOfFameStore;
+  seedStarter(store);
+  pokemon::PokemonService service(store, battleStore, ivEvStore, hallOfFameStore, {nullptr, oneRandom});
+
+  auto trainersQueued = [&](std::vector<pokemon::PendingEvent>& trainers) {
+    pokemon::PokemonSnapshot snapshot{};
+    ASSERT_EQ(service.loadSnapshot(snapshot), pokemon::ServiceStatus::Ok);
+    trainers.clear();
+    for (const pokemon::PendingEvent& event : snapshot.state.pendingEvents) {
+      if (event.kind == pokemon::PendingEventKind::Trainer) trainers.push_back(event);
+    }
+  };
+  std::vector<pokemon::PendingEvent> trainers;
+  ASSERT_TRUE(service.creditMinutes(29, 50));
+  trainersQueued(trainers);
+  EXPECT_TRUE(trainers.empty());
+
+  ASSERT_TRUE(service.creditMinutes(1, 50));  // lifetime 30: the first check
+  trainersQueued(trainers);
+  ASSERT_EQ(trainers.size(), 1U);
+  pokemon::PokemonSnapshot snapshot{};
+  ASSERT_EQ(service.loadSnapshot(snapshot), pokemon::ServiceStatus::Ok);
+  const uint8_t leaderLevel = pokemon::levelXpProgress(snapshot.party[0].totalXp).level;
+  EXPECT_EQ(trainers[0].speciesId, 2U);
+  EXPECT_EQ(trainers[0].level, pokemon::trainerLevelFor(50, leaderLevel));
+  EXPECT_EQ(trainers[0].gender, pokemon::Gender::Unknown);
+
+  ASSERT_TRUE(service.creditMinutes(30, 50));
+  ASSERT_TRUE(service.creditMinutes(30, 50));
+  trainersQueued(trainers);
+  EXPECT_EQ(trainers.size(), pokemon::MAX_PENDING_TRAINERS);
+
+  // A random source that always draws 0 never brings a trainer.
+  Storage.clear();
+  pokemon::PokemonStore quietStore;
+  seedStarter(quietStore);
+  pokemon::PokemonBattleStore quietBattleStore;
+  pokemon::PokemonIvEvStore quietIvEvStore;
+  pokemon::PokemonHallOfFameStore quietHallOfFameStore;
+  pokemon::PokemonService quiet(quietStore, quietBattleStore, quietIvEvStore, quietHallOfFameStore,
+                                {nullptr, zeroRandom});
+  ASSERT_TRUE(quiet.creditMinutes(120, 50));
+  ASSERT_EQ(quiet.loadSnapshot(snapshot), pokemon::ServiceStatus::Ok);
+  for (const pokemon::PendingEvent& event : snapshot.state.pendingEvents) {
+    EXPECT_NE(event.kind, pokemon::PendingEventKind::Trainer);
+  }
+}
+
+TEST(PokemonService, ResolvingATrainerPopsItAndAWinMayLeaveAPotion) {
+  Storage.clear();
+  pokemon::PokemonStore store;
+  pokemon::PokemonBattleStore battleStore;
+  pokemon::PokemonIvEvStore ivEvStore;
+  pokemon::PokemonHallOfFameStore hallOfFameStore;
+  seedStarter(store);
+  pokemon::PokemonState state{};
+  ASSERT_TRUE(store.loadState(state));
+  pokemon::PendingEvent trainer{};
+  trainer.kind = pokemon::PendingEventKind::Trainer;
+  trainer.speciesId = 4;
+  trainer.level = 12;
+  trainer.recordId = 0xDEADBEEF;
+  ASSERT_TRUE(pokemon::enqueuePendingEvent(state, trainer));
+  ASSERT_TRUE(pokemon::enqueuePendingEvent(state, trainer));
+  pokemon::syncDashboardNotice(state);
+  ASSERT_TRUE(store.commit(state));
+  pokemon::PokemonService service(store, battleStore, ivEvStore, hallOfFameStore, {nullptr, oneRandom});
+
+  uint8_t reward = 0xFF;
+  EXPECT_EQ(service.acknowledgeItem(), pokemon::ServiceStatus::NotApplicable);
+  ASSERT_EQ(service.resolveTrainer(/*won=*/false, reward), pokemon::ServiceStatus::Ok);
+  EXPECT_EQ(reward, 0U);
+  ASSERT_EQ(service.resolveTrainer(/*won=*/true, reward), pokemon::ServiceStatus::Ok);
+  EXPECT_EQ(reward, pokemon::trainerRewardItemFor(12));
+
+  pokemon::PokemonSnapshot snapshot{};
+  ASSERT_EQ(service.loadSnapshot(snapshot), pokemon::ServiceStatus::Ok);
+  EXPECT_EQ(snapshot.state.pendingEvents[0].kind, pokemon::PendingEventKind::None);
+  EXPECT_EQ(snapshot.state.dashboardNotice, pokemon::DashboardNotice::None);
+  EXPECT_EQ(snapshot.state.bagCounts[reward - pokemon::EVOLUTION_ITEM_COUNT - 1U], 1U);
+  EXPECT_EQ(service.resolveTrainer(true, reward), pokemon::ServiceStatus::NotApplicable);
+}
